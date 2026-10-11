@@ -1,8 +1,8 @@
 # Bravo Viewer
 
-<img src="logo.png" alt="BRS" width="160">
+<img src="catalog/card.png" alt="Bravo Viewer · BRS" width="320">
 
-Extensão BlueOS para consultar o histórico do ROV: horas, operações, energia, ocorrências, gráficos e inventário de tipos/campos. **Beta 0.3.0-beta.1**, desenvolvida para testes com BlueOS 1.4.6, ArduSub 4.7.1 e Navigator.
+Extensão BlueOS para consultar o histórico do ROV: horas, operações, energia, ocorrências, gráficos e inventário de tipos/campos. **Beta 0.3.1-beta.1**, desenvolvida para testes com BlueOS 1.4.6, ArduSub 4.7.1 e Navigator.
 
 ## Instalação
 
@@ -15,16 +15,16 @@ No gerenciador de **Extensões do BlueOS**, abra as configurações de fontes/re
 https://raw.githubusercontent.com/Reikjv/Bravo-Viewer/main/manifest.json
 ```
 
-Ative a fonte, procure **Bravo Viewer** e selecione a versão **0.3.0-beta.1**. Habilite versões de desenvolvimento/beta se necessário. O BlueOS escolhe ARM64 ou ARMv7 e baixa `ghcr.io/reikjv/bravo-viewer:0.3.0-beta.1`. É preciso acesso à internet durante o download; o painel funciona localmente após a instalação.
+Ative a fonte, procure **Bravo Viewer** e selecione a versão **0.3.1-beta.1**. Habilite versões de desenvolvimento/beta se necessário. O BlueOS escolhe ARM64 ou ARMv7 e baixa `ghcr.io/reikjv/bravo-viewer:0.3.1-beta.1`. É preciso acesso à internet durante o download; o painel funciona localmente após a instalação.
 
 O catálogo usa o suporte a fontes externas do BlueOS. A extensão não foi incluída no catálogo oficial. Consulte a [documentação do BlueOS](https://blueos.cloud/docs/stable/development/extensions/).
 
 ## Instaladores offline
 
-Baixe nas [releases](https://github.com/Reikjv/Bravo-Viewer/releases/tag/v0.3.0-beta.1):
+Baixe nas [releases](https://github.com/Reikjv/Bravo-Viewer/releases/tag/v0.3.1-beta.1):
 
-- [ARM64](https://github.com/Reikjv/Bravo-Viewer/releases/download/v0.3.0-beta.1/Bravo-Viewer-v0.3.0-beta.1-arm64.zip)
-- [ARMv7](https://github.com/Reikjv/Bravo-Viewer/releases/download/v0.3.0-beta.1/Bravo-Viewer-v0.3.0-beta.1-armv7.zip)
+- [ARM64](https://github.com/Reikjv/Bravo-Viewer/releases/download/v0.3.1-beta.1/Bravo-Viewer-v0.3.1-beta.1-arm64.zip)
+- [ARMv7](https://github.com/Reikjv/Bravo-Viewer/releases/download/v0.3.1-beta.1/Bravo-Viewer-v0.3.1-beta.1-armv7.zip)
 
 Confira o checksum `.zip.sha256`. Extraia o pacote no BlueOS e execute `bash install.sh` na pasta extraída. O instalador confere arquitetura e hashes, carrega a imagem incluída e preserva o volume em atualizações. A arquitetura relevante é a do **servidor Docker**, consultável com `docker version --format '{{.Server.Arch}}'`.
 
@@ -36,7 +36,7 @@ Abra a extensão no BlueOS ou `http://IP_DO_BLUEOS:8090/`. Em Configuração, id
 
 ### Operações
 
-A aba **Operações** agrupa as sessões de cada saída a campo. Sempre há uma operação aberta: os logs importados e a coleta ao vivo entram nela. Informe nome, local, cliente/serviço e observações. Ao voltar para a base, use **Encerrar operação**: o resumo é congelado, o ZIP da operação é gerado com barra de progresso e a próxima operação começa automaticamente. O histórico existente na atualização forma a Operação 1.
+A aba **Operações** agrupa as sessões de cada saída a campo. Sempre há uma operação aberta: os logs importados e a coleta ao vivo entram nela. Informe nome, local, cliente/serviço e observações. Ligar e desligar o ROV não muda a operação: cada inicialização vira uma sessão dentro dela. Ao voltar para a base, use **Encerrar operação**: os logs mais recentes do BlueOS são buscados para incluir o último mergulho, o resumo é congelado, o ZIP da operação é gerado com barra de progresso e a próxima operação começa automaticamente. O histórico existente na atualização forma a Operação 1.
 
 O ZIP da operação é leve por padrão: relatório, resumos JSON e os logs originais `.tlog`/`.bin`, apenas copiados. Tabelas CSV/JSONL completas são opcionais porque exigem reler todos os registros no ROV. O ROV guarda as últimas **10** operações encerradas (ajustável em Configuração, de 5 a 30); ao passar do limite, a mais antiga é removida com registros e originais. A lista indica quais ZIPs ainda não foram baixados. Logs de uma operação encerrada não são alterados depois.
 

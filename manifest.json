@@ -5,8 +5,8 @@
     "website": "https://github.com/Reikjv/Bravo-Viewer",
     "docker": "ghcr.io/reikjv/bravo-viewer",
     "description": "Horas, operações, energia e ocorrências do ROV, com gráficos, inventário e exportação organizada.",
-    "extension_logo": "https://raw.githubusercontent.com/Reikjv/Bravo-Viewer/main/logo.png",
-    "company_logo": "https://raw.githubusercontent.com/Reikjv/Bravo-Viewer/main/logo.png",
+    "extension_logo": "https://raw.githubusercontent.com/Reikjv/Bravo-Viewer/main/catalog/card.png",
+    "company_logo": "https://raw.githubusercontent.com/Reikjv/Bravo-Viewer/main/catalog/reikjv.png",
     "versions": {
       "0.3.0-beta.1": {
         "tag": "0.3.0-beta.1",
@@ -49,8 +49,8 @@
         "website": "https://github.com/Reikjv/Bravo-Viewer",
         "readme": "https://raw.githubusercontent.com/Reikjv/Bravo-Viewer/main/README.md",
         "company": {
-          "name": "BRS",
-          "about": "Bravo Viewer · histórico e diagnóstico do ROV"
+          "name": "Bravo Viewer",
+          "about": "Histórico e diagnóstico do ROV · Reikjv"
         },
         "permissions": {
           "HostConfig": {
@@ -104,8 +104,8 @@
         "website": "https://github.com/Reikjv/Bravo-Viewer",
         "readme": "https://raw.githubusercontent.com/Reikjv/Bravo-Viewer/main/README.md",
         "company": {
-          "name": "BRS",
-          "about": "Bravo Viewer · histórico e diagnóstico do ROV"
+          "name": "Bravo Viewer",
+          "about": "Histórico e diagnóstico do ROV · Reikjv"
         },
         "permissions": {
           "HostConfig": {
@@ -159,8 +159,8 @@
         "website": "https://github.com/Reikjv/Bravo-Viewer",
         "readme": "https://raw.githubusercontent.com/Reikjv/Bravo-Viewer/main/README.md",
         "company": {
-          "name": "BRS",
-          "about": "Bravo Viewer · histórico e diagnóstico do ROV"
+          "name": "Bravo Viewer",
+          "about": "Histórico e diagnóstico do ROV · Reikjv"
         },
         "permissions": {
           "HostConfig": {

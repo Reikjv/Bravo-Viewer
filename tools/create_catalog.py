@@ -23,10 +23,10 @@ def catalog(metadata):
     version = {'tag':__version__,'type':'tool','images':images,
                'authors':[{'name':'Reikjv','email':'141414061+Reikjv@users.noreply.github.com'}],
                'filter_tags':['logs','history','monitoring','export'],'extra_links':{'github':PUBLIC},
-               'website':PUBLIC,'readme':RAW + '/README.md','company':{'name':'BRS','about':'Bravo Viewer · histórico e diagnóstico do ROV'},'permissions':permissions}
+               'website':PUBLIC,'readme':RAW + '/README.md','company':{'name':'Bravo Viewer','about':'Histórico e diagnóstico do ROV · Reikjv'},'permissions':permissions}
     return [{'identifier':'brs.bravo-viewer','name':'Bravo Viewer','website':PUBLIC,'docker':'ghcr.io/reikjv/bravo-viewer',
              'description':'Horas, operações, energia e ocorrências do ROV, com gráficos, inventário e exportação organizada.',
-             'extension_logo':RAW + '/logo.png','company_logo':RAW + '/logo.png','versions':{__version__:version}}]
+             'extension_logo':RAW + '/catalog/card.png','company_logo':RAW + '/catalog/reikjv.png','versions':{__version__:version}}]
 
 
 def main():

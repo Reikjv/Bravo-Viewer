@@ -124,7 +124,14 @@ class Service:
         """Encerra, exporta a operação e aplica o limite de operações guardadas."""
         from .exporter import build_bundle
         report = self.reporter(job_id)
-        report("Encerrando a operação", 0)
+        # O ROV acabou de religar na base: traz o log do último mergulho antes de congelar.
+        report("Buscando os logs mais recentes no BlueOS", 0)
+        sync_error = None
+        try:
+            self.sync(self.store.config()["host"], lambda name, count: report(f"Buscando logs: {name}"))
+        except Exception as error:
+            sync_error = str(error)
+        report("Encerrando a operação", 5)
         ids = self.store.close_operation(args.get("values"))
         context = {"scope": "operation", "operation": ids["closed"], "tab": "overview", "include_data": args.get("include_data", False), "include_originals": True}
         result = build_bundle(self.store, job_id, context, lambda text, percent=None: report(text, None if percent is None else percent * .9), self.stop)
@@ -133,7 +140,7 @@ class Service:
         for old in self.store.expired_operations():
             removed.append(self.store.delete_operation(old, lambda text: report(text, 95)))
         report("Concluído", 100)
-        return {**result, **ids, "removed": removed}
+        return {**result, **ids, "removed": removed, "sync_error": sync_error}
 
     def sync(self, host, progress):
         client = BlueOS(host)

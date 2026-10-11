@@ -430,7 +430,7 @@ async function loadStatus() {
       else if (job.action === "sync") notice(`Busca concluída: ${plural(job.result.imported, "arquivo importado", "arquivos importados")}, ${fmt(job.result.skipped, 0)} já conhecidos ou vazios e ${fmt(job.result.errors.length, 0)} pastas/arquivos indisponíveis.`);
       else if (job.action === "bundle" && opExportJobs.has(job.id)) { opExportJobs.delete(job.id); notice("ZIP da operação pronto para download."); task(loadOperations)(); }
       else if (job.action === "bundle") notice("Exportação pronta. Use Baixar ZIP para salvar o relatório e os dados.");
-      else if (job.action === "close_operation") notice(`Operação encerrada. ZIP pronto${job.result.removed.length ? `; ${job.result.removed.map(op => op.name).join(", ")} removida do ROV pelo limite` : ""}. A nova operação já está registrando.`);
+      else if (job.action === "close_operation") notice(`Operação encerrada. ZIP pronto${job.result.removed.length ? `; ${job.result.removed.map(op => op.name).join(", ")} removida do ROV pelo limite` : ""}. A nova operação já está registrando.${job.result.sync_error ? " Atenção: o BlueOS não respondeu à busca final; logs ainda não importados não entraram nesta operação." : ""}`, Boolean(job.result.sync_error));
       else notice(job.result.duplicate ? "Arquivo já conhecido; o histórico foi preservado sem duplicação." : `Importação concluída: ${plural(job.result.records, "registro", "registros")}.`);
     }
   });
