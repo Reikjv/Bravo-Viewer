@@ -6,7 +6,8 @@ base.search = ""; base.hash = "";
 const endpoint = path => new URL(path, base).href;
 const titles = {
   overview: ["Visão geral", "Horas, operações, energia e ocorrências do equipamento."],
-  sessions: ["Sessões e operações", "Histórico por fonte, períodos armados e observações do serviço."],
+  operations: ["Operações", "Operação atual, encerramento com ZIP e histórico das operações anteriores."],
+  sessions: ["Sessões", "Histórico por arquivo ou coleta, períodos armados e observações."],
   explorer: ["Inventário de dados", "Todos os tipos e campos disponíveis nos registros preservados."],
   charts: ["Energia e gráficos", "Tensão, corrente, consumo, energia e estado armado por origem."],
   events: ["Ocorrências", "Alertas, eventos e mensagens de diagnóstico em contexto."],
@@ -19,7 +20,8 @@ let recordData = null, focusedField = null, chartData = null, plotted = [];
 let completedJobs = new Set(), refreshing = false, chartRequest = 0;
 let configDirty = false;
 let initialized = false;
-let exportJob = null;
+let exportJob = null, closeJob = null, operationsData = null, opDirty = false;
+const opExportJobs = new Set();
 let chartAbort = null;
 const loadedTabs = new Set(), loadingTabs = new Set();
 const chartIndicators = {
@@ -99,7 +101,8 @@ async function loadActivePage() {
   if (loadingTabs.has(tab)) return;
   loadingTabs.add(tab);
   try {
-    if (tab === "explorer") await loadExplorer();
+    if (tab === "operations") await loadOperations();
+    else if (tab === "explorer") await loadExplorer();
     else if (tab === "charts") await loadChartStreams();
     else if (tab === "events") await loadEvents();
     else if (tab === "files") await loadInventory();
@@ -107,9 +110,73 @@ async function loadActivePage() {
     loadedTabs.add(tab);
   } finally { loadingTabs.delete(tab); }
 }
+const meters = value => typeof value === "number" ? `${fmt(value, 2)} m` : "—";
+function operationName(id) {
+  return operationsData?.operations.find(op => op.id === id)?.name || "Fora de operação";
+}
+function operationStats(op) {
+  const s = op.summary, depth = s.depth || {};
+  const elapsed = (op.ended_at || Date.now() / 1000) - op.started_at;
+  return [
+    ["Duração", duration(elapsed)], ["Tempo armado", duration(s.armed_seconds)],
+    ["Profundidade máxima", depth.available ? meters(depth.max) : "Sem sensor"],
+    ["Profundidade média", depth.available ? meters(depth.mean) : "Sem sensor"],
+    ["Sessões", fmt(s.sessions || 0, 0)],
+  ].map(([label, value]) => `<div><small>${label}</small><strong>${escape(value)}</strong></div>`).join("");
+}
+function renderOperations() {
+  if (!operationsData) return;
+  const ops = operationsData.operations, current = ops.find(op => op.status === "open");
+  const closed = ops.filter(op => op.status === "closed"), limit = operationsData.limit;
+  if (current) {
+    $("current-op-name").textContent = current.name;
+    $("current-op-meta").textContent = [current.location, current.client, `desde ${date(current.started_at)}`].filter(Boolean).join(" · ");
+    $("current-op-stats").innerHTML = operationStats(current);
+    $("op-stats").innerHTML = operationStats(current);
+    $("op-started").textContent = "INICIADA EM " + date(current.started_at).toUpperCase();
+    if (!opDirty && document.activeElement.closest?.("#op-form") == null) {
+      $("op-name").value = current.name; $("op-location").value = current.location;
+      $("op-client").value = current.client; $("op-notes").value = current.notes;
+    }
+  }
+  const oldest = closed.at(-1);
+  $("op-retention").textContent = `${closed.length} de ${limit} operações encerradas guardadas no ROV` + (closed.length >= limit && oldest ? ` · ao encerrar a atual, “${oldest.name}” será removida` : "");
+  $("operations-table").innerHTML = table(["Operação", "Período", "Tempo armado", "Prof. máxima", "Prof. média", "Sessões", "ZIP"], closed.map(op => {
+    const depth = op.summary.depth || {};
+    const zip = op.bundle_ready
+      ? `<a class="button secondary" href="${escape(endpoint("api/bundle?id=" + op.bundle_id))}">↓ Baixar</a><small class="${op.downloaded_at ? "badge-ok" : "badge-warn"}">${op.downloaded_at ? "Baixado" : "Ainda não baixado"}</small>`
+      : `<button class="secondary" data-op-export="${op.id}">Gerar ZIP</button>`;
+    return [
+      `<strong>${escape(op.name)}</strong><small>${escape([op.location, op.client].filter(Boolean).join(" · ") || "Sem local informado")}</small>`,
+      `${escape(date(op.started_at))}<small>até ${escape(date(op.ended_at))}</small>`,
+      duration(op.summary.armed_seconds),
+      depth.available ? meters(depth.max) : '<span class="muted">Sem sensor</span>',
+      depth.available ? meters(depth.mean) : '<span class="muted">—</span>',
+      fmt(op.summary.sessions || 0, 0), zip,
+    ];
+  }), "Nenhuma operação encerrada ainda. Encerre a operação atual ao voltar para a base.");
+}
+async function loadOperations() {
+  operationsData = await api("operations");
+  renderOperations();
+}
+function openCloseDialog() {
+  const current = operationsData?.operations.find(op => op.status === "open");
+  if (!current) return;
+  const closed = operationsData.operations.filter(op => op.status === "closed");
+  $("close-summary").textContent = `“${$("op-name").value || current.name}” será encerrada agora. A coleta continua na próxima operação, iniciada automaticamente.`;
+  $("close-stats").innerHTML = operationStats(current);
+  $("close-retention").textContent = closed.length >= operationsData.limit ? `Limite de ${operationsData.limit} operações atingido: “${closed.at(-1).name}” e seus registros serão removidos do ROV.` : `O ROV guarda as últimas ${operationsData.limit} operações encerradas.`;
+  $("close-confirm").disabled = false; $("close-download").hidden = true; $("close-bar").hidden = true; $("close-progress").textContent = "";
+  $("close-dialog").showModal();
+}
+function progressBar(id, percent) {
+  $(id).hidden = typeof percent !== "number";
+  $(id).firstElementChild.style.setProperty("--p", (percent || 0) / 100);
+}
 function sessionRows(list) {
   return list.map(file => [
-    `<strong>${escape(file.name)}</strong><small>${escape(file.kind.toUpperCase())} · ${escape(file.source_key.split(":")[0])}</small>`,
+    `<strong>${escape(file.name)}</strong><small>${escape(file.kind.toUpperCase())} · ${escape(operationName(file.operation_id))}</small>`,
     fmt(file.summary.records || 0, 0),
     duration(file.summary.observed_seconds),
     duration(file.summary.armed_seconds),
@@ -329,11 +396,13 @@ async function loadStatus() {
     $("config-host").value = data.config.host;
     $("config-collect").checked = data.config.collect;
     $("config-poll").value = String(data.config.poll_seconds);
+    $("config-op-limit").value = String(data.config.operation_limit || 10);
   }
   const running = data.jobs.filter(job => ["queued", "running"].includes(job.status));
   const bundle = data.jobs.find(job => job.id === exportJob);
   if (bundle) {
-    $("export-progress").textContent = bundle.progress;
+    $("export-progress").textContent = bundle.status === "done" ? "Pronto" : `${bundle.progress}${typeof bundle.percent === "number" ? ` · ${bundle.percent}%` : ""}`;
+    progressBar("export-bar", bundle.status === "done" ? 100 : bundle.percent);
     $("export-start").disabled = ["queued", "running"].includes(bundle.status);
     if (bundle.status === "done") {
       $("export-download").href = endpoint(bundle.result.download);
@@ -342,14 +411,26 @@ async function loadStatus() {
     }
   }
   $("job").hidden = !running.length;
-  if (running.length) $("job-text").textContent = running.at(-1).progress;
+  if (running.length) {
+    const job = running.at(-1);
+    $("job-text").textContent = `${job.progress}${typeof job.percent === "number" ? ` · ${job.percent}%` : ""}`;
+    progressBar("job-bar", job.percent);
+  }
+  const closing = data.jobs.find(job => job.id === closeJob);
+  if (closing) {
+    $("close-progress").textContent = closing.status === "done" ? "Operação encerrada" : closing.status === "error" ? closing.progress : `${closing.progress} · ${closing.percent || 0}%`;
+    progressBar("close-bar", closing.status === "error" ? undefined : closing.status === "done" ? 100 : closing.percent || 0);
+    if (closing.status === "done") { $("close-download").href = endpoint(closing.result.download); $("close-download").hidden = false; }
+  }
   let changed = false;
   data.jobs.filter(job => ["done", "error"].includes(job.status)).forEach(job => {
     if (!completedJobs.has(job.id)) {
       completedJobs.add(job.id); changed = job.action !== "bundle" || changed;
       if (job.status === "error") notice(job.progress, true);
       else if (job.action === "sync") notice(`Busca concluída: ${plural(job.result.imported, "arquivo importado", "arquivos importados")}, ${fmt(job.result.skipped, 0)} já conhecidos ou vazios e ${fmt(job.result.errors.length, 0)} pastas/arquivos indisponíveis.`);
+      else if (job.action === "bundle" && opExportJobs.has(job.id)) { opExportJobs.delete(job.id); notice("ZIP da operação pronto para download."); task(loadOperations)(); }
       else if (job.action === "bundle") notice("Exportação pronta. Use Baixar ZIP para salvar o relatório e os dados.");
+      else if (job.action === "close_operation") notice(`Operação encerrada. ZIP pronto${job.result.removed.length ? `; ${job.result.removed.map(op => op.name).join(", ")} removida do ROV pelo limite` : ""}. A nova operação já está registrando.`);
       else notice(job.result.duplicate ? "Arquivo já conhecido; o histórico foi preservado sem duplicação." : `Importação concluída: ${plural(job.result.records, "registro", "registros")}.`);
     }
   });
@@ -360,7 +441,8 @@ async function refresh() {
   if (refreshing) return;
   refreshing = true;
   try {
-    [files, streams] = await Promise.all([api("files"), api("streams")]);
+    [files, streams, operationsData] = await Promise.all([api("files"), api("streams"), api("operations")]);
+    renderOperations();
     const overview = await api("overview");
     renderOverview(overview); renderFiles();
     const fileOptions = files.map(file => ({value: file.id, label: file.name}));
@@ -396,6 +478,13 @@ async function loadInventory() {
 }
 document.querySelectorAll("[data-tab]").forEach(button => button.onclick = () => go(button.dataset.tab));
 document.querySelectorAll("[data-goto]").forEach(button => button.onclick = event => { event.preventDefault(); go(button.dataset.goto); });
+document.addEventListener("click", task(async event => {
+  const exporter = event.target.closest("[data-op-export]");
+  if (!exporter) return;
+  exporter.disabled = true; exporter.textContent = "Gerando…";
+  const job = await post("operation-export", {id: Number(exporter.dataset.opExport)});
+  opExportJobs.add(job.id); await loadStatus();
+}));
 document.addEventListener("click", event => {
   const button = event.target.closest("[data-session]");
   if (button) { $("session-select").value = button.dataset.session; renderSession(); go("sessions"); }
@@ -427,12 +516,29 @@ $("upload").onchange = task(async () => {
 });
 $("config-form").onsubmit = task(async event => {
   event.preventDefault();
-  await post("config", {equipment: $("config-equipment").value, host: $("config-host").value, collect: $("config-collect").checked, poll_seconds: Number($("config-poll").value)});
+  await post("config", {equipment: $("config-equipment").value, host: $("config-host").value, collect: $("config-collect").checked, poll_seconds: Number($("config-poll").value), operation_limit: Number($("config-op-limit").value)});
   configDirty = false;
   notice("Configuração salva. A coleta segue o estado escolhido."); await loadStatus();
 });
 $("config-form").oninput = () => { configDirty = true; };
 $("export-summary").href = endpoint("api/export-summary");
+const opValues = () => ({name: $("op-name").value, location: $("op-location").value, client: $("op-client").value, notes: $("op-notes").value});
+$("op-form").oninput = () => { opDirty = true; };
+$("op-form").onsubmit = task(async event => {
+  event.preventDefault();
+  await post("operation", opValues()); opDirty = false;
+  notice("Dados da operação salvos."); await loadOperations();
+});
+$("close-op").onclick = $("overview-close-op").onclick = openCloseDialog;
+$("close-cancel").onclick = () => $("close-dialog").close();
+$("close-form").onsubmit = task(async event => {
+  event.preventDefault();
+  const values = opDirty || active === "operations" ? opValues() : {};
+  const job = await post("operation-close", {values, include_data: $("close-data").checked});
+  closeJob = job.id; opDirty = false; $("close-confirm").disabled = true;
+  $("close-progress").textContent = "Encerrando…"; progressBar("close-bar", 0);
+  await loadStatus();
+});
 $("export-viewer").onclick = () => $("export-dialog").showModal();
 $("export-close").onclick = () => $("export-dialog").close();
 $("export-form").onsubmit = task(async event => {
@@ -444,6 +550,7 @@ $("export-form").onsubmit = task(async event => {
   if (active === "charts") Object.assign(context, {file: $("chart-file").value, stream: $("chart-stream").value, field: $("chart-field").value});
   if (active === "explorer") Object.assign(context, {file: $("explorer-file").value, stream: $("explorer-stream").value, field: focusedField || "", search: $("field-search").value, group: $("explorer-group").value});
   if (active === "sessions") context.file = $("session-select").value;
+  if (active === "operations" && context.scope === "view") Object.assign(context, {scope: "operation", operation: operationsData?.operations.find(op => op.status === "open")?.id || 0});
   if (active === "events") Object.assign(context, {file: $("event-file").value, search: $("event-search").value});
   if (active === "files") context.search = $("files-search").value;
   const job = await post("bundle", context);

@@ -12,6 +12,44 @@ import time
 from .model import Catalog, category, dumps, flatten
 
 
+def operation_summary(files):
+    """Resumo da operação sem somar fontes que registram a mesma telemetria.
+
+    Coleta ao vivo e .tlog descrevem o mesmo veículo; tempos e energia usam o grupo
+    de formato com maior cobertura observada, nunca a soma entre grupos.
+    """
+    groups = {}
+    for file in files:
+        groups.setdefault(file["kind"], []).append(file["summary"])
+    def total(items, key):
+        return sum(item.get(key, 0) or 0 for item in items)
+    timed = max(groups.items(), key=lambda item: total(item[1], "observed_seconds"), default=(None, []))
+    result = {"sessions": len(files), "records": sum(f["summary"].get("records", 0) for f in files),
+              "time_source": timed[0], "observed_seconds": total(timed[1], "observed_seconds"),
+              "armed_seconds": total(timed[1], "armed_seconds"), "gaps": total(timed[1], "gaps"),
+              "clock_issues": sum(len(f["summary"].get("clock_issues", [])) for f in files)}
+    metrics = [s.get("metrics", {}) for s in timed[1]]
+    def pick(names, mode):
+        values = [(m[n][mode], m[n]["unit"]) for m in metrics for n in names if n in m]
+        if not values:
+            return None
+        value = min(values) if mode == "min" else max(values)
+        return {"value": value[0], "unit": value[1]}
+    result["voltage_min"] = pick(("SYS_STATUS.voltage_battery", "BAT.Volt"), "min")
+    result["current_max"] = pick(("SYS_STATUS.current_battery", "BAT.Curr"), "max")
+    consumed = [m["BATTERY_STATUS.current_consumed"] for m in metrics if "BATTERY_STATUS.current_consumed" in m]
+    result["consumption"] = {"value": sum(max(0, c["last"] - c["first"]) for c in consumed), "unit": consumed[0]["unit"]} if consumed else None
+    # Profundidade exige sensor externo; sem ele a altitude estimada não representa profundidade.
+    depth_groups = {kind: [s["depth"] for s in items if s.get("depth", {}).get("external")] for kind, items in groups.items()}
+    depth_kind, depths = max(depth_groups.items(), key=lambda item: sum(d["seconds"] for d in item[1]), default=(None, []))
+    maxima = [d["max"] for items in depth_groups.values() for d in items if d.get("max") is not None]
+    seconds = sum(d["seconds"] for d in depths)
+    result["depth"] = {"available": bool(maxima), "max": max(maxima) if maxima else None,
+                       "mean": sum(d["weighted"] for d in depths) / seconds if seconds else None,
+                       "submerged_seconds": seconds, "unit": "m", "source": depth_kind}
+    return result
+
+
 class Store:
     def __init__(self, directory):
         self.directory = Path(directory)
@@ -45,7 +83,22 @@ class Store:
                     ts REAL, seq INTEGER, severity TEXT, type TEXT, text TEXT);
                 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
                 CREATE INDEX IF NOT EXISTS events_file_id ON events(file_id,id);
+                CREATE TABLE IF NOT EXISTS operations(
+                    id INTEGER PRIMARY KEY, name TEXT NOT NULL, location TEXT NOT NULL DEFAULT '',
+                    client TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '',
+                    started_at REAL NOT NULL, ended_at REAL, status TEXT NOT NULL DEFAULT 'open',
+                    summary TEXT NOT NULL DEFAULT '{}', bundle_id TEXT, downloaded_at REAL);
             """)
+            if "operation_id" not in {row["name"] for row in db.execute("PRAGMA table_info(files)")}:
+                db.execute("ALTER TABLE files ADD COLUMN operation_id INTEGER")
+            db.execute("CREATE INDEX IF NOT EXISTS files_operation ON files(operation_id)")
+            if not db.execute("SELECT 1 FROM operations WHERE status='open'").fetchone():
+                # Primeira execução com operações: o histórico existente forma a Operação 1.
+                number = db.execute("SELECT coalesce(max(id),0)+1 FROM operations").fetchone()[0]
+                first = db.execute("SELECT min(imported_at) FROM files").fetchone()[0] if number == 1 else None
+                op = db.execute("INSERT INTO operations(name,started_at) VALUES(?,?)", (f"Operação {number}", first or time.time())).lastrowid
+                if number == 1:
+                    db.execute("UPDATE files SET operation_id=? WHERE operation_id IS NULL", (op,))
 
     @contextmanager
     def db(self):
@@ -82,6 +135,96 @@ class Store:
             for key, value in updates.items():
                 db.execute("INSERT OR REPLACE INTO settings VALUES (?,?)", (key, dumps(value)))
         return self.config()
+
+    def current_operation(self, db=None):
+        if db is None:
+            with self.db() as db:
+                return self.current_operation(db)
+        return dict(db.execute("SELECT * FROM operations WHERE status='open' ORDER BY id DESC LIMIT 1").fetchone())
+
+    def operations(self):
+        files = self.files()
+        with self.db() as db:
+            rows = [dict(row) for row in db.execute("SELECT * FROM operations ORDER BY id DESC")]
+        for op in rows:
+            op_files = [f for f in files if f["operation_id"] == op["id"]]
+            op["summary"] = json.loads(op["summary"]) if op["status"] == "closed" else operation_summary(op_files)
+            op["files"] = [f["id"] for f in op_files]
+            # Exportações antigas são podadas; o ZIP pode ser gerado novamente.
+            op["bundle_ready"] = bool(op["bundle_id"]) and (self.directory / "exports" / f"{op['bundle_id']}.zip").is_file()
+        return rows
+
+    def update_operation(self, values):
+        fields = {}
+        for name, limit in (("name", 100), ("location", 200), ("client", 200), ("notes", 5000)):
+            if name in values:
+                value = values[name]
+                if not isinstance(value, str) or len(value) > limit:
+                    raise ValueError("Dados da operação inválidos")
+                fields[name] = value.strip()
+        if "name" in fields and not fields["name"]:
+            raise ValueError("Informe o nome da operação")
+        with self.write_lock, self.db() as db:
+            op = self.current_operation(db)
+            for name, value in fields.items():
+                db.execute(f"UPDATE operations SET {name}=? WHERE id=?", (value, op["id"]))
+        return self.current_operation()
+
+    def close_operation(self, values=None):
+        """Congela a operação aberta com seu resumo e inicia a próxima na mesma transação."""
+        if values:
+            self.update_operation(values)
+        files = self.files()
+        with self.write_lock, self.db() as db:
+            op = self.current_operation(db)
+            now = time.time()
+            summary = operation_summary([f for f in files if f["operation_id"] == op["id"]])
+            db.execute("UPDATE operations SET status='closed',ended_at=?,summary=? WHERE id=?", (now, dumps(summary), op["id"]))
+            number = db.execute("SELECT coalesce(max(id),0)+1 FROM operations").fetchone()[0]
+            new = db.execute("INSERT INTO operations(name,started_at) VALUES(?,?)", (f"Operação {number}", now)).lastrowid
+        return {"closed": op["id"], "current": new}
+
+    def operation_limit(self):
+        return self.config().get("operation_limit", 10)
+
+    def expired_operations(self):
+        with self.db() as db:
+            rows = db.execute("SELECT id FROM operations WHERE status='closed' ORDER BY ended_at DESC, id DESC").fetchall()
+        return [row["id"] for row in rows[self.operation_limit():]]
+
+    def delete_operation(self, operation_id, progress=lambda text: None):
+        """Remove uma operação encerrada: registros, originais e a própria operação."""
+        with self.db() as db:
+            op = db.execute("SELECT * FROM operations WHERE id=?", (operation_id,)).fetchone()
+            if not op or op["status"] != "closed":
+                raise ValueError("Somente operações encerradas podem ser removidas")
+            files = db.execute("SELECT id,path FROM files WHERE operation_id=?", (operation_id,)).fetchall()
+        originals = (self.directory / "originals").resolve()
+        for index, file in enumerate(files):
+            progress(f"Removendo {op['name']}: sessão {index + 1}/{len(files)}")
+            # Uma transação por sessão evita bloquear a coleta por muito tempo.
+            with self.write_lock, self.db() as db:
+                db.execute("DELETE FROM records WHERE file_id=?", (file["id"],))
+                db.execute("DELETE FROM events WHERE file_id=?", (file["id"],))
+                db.execute("DELETE FROM streams WHERE file_id=?", (file["id"],))
+                db.execute("DELETE FROM files WHERE id=?", (file["id"],))
+            if file["path"]:
+                path = Path(file["path"]).resolve()
+                if path.is_relative_to(originals) and path.is_file():
+                    path.unlink(missing_ok=True)
+        with self.write_lock, self.db() as db:
+            db.execute("DELETE FROM operations WHERE id=?", (operation_id,))
+        with self._cache_lock:
+            self._series_cache.clear()
+        return {"id": operation_id, "name": op["name"], "sessions": len(files)}
+
+    def set_operation_bundle(self, operation_id, bundle_id):
+        with self.write_lock, self.db() as db:
+            db.execute("UPDATE operations SET bundle_id=? WHERE id=?", (bundle_id, operation_id))
+
+    def mark_bundle_downloaded(self, bundle_id):
+        with self.write_lock, self.db() as db:
+            db.execute("UPDATE operations SET downloaded_at=? WHERE bundle_id=?", (time.time(), bundle_id))
 
     def files(self):
         with self.db() as db:

@@ -30,8 +30,11 @@ def capabilities(store):
     add("Inventário completo dos registros", "Disponível nesta versão", types,
         "Arquivos das pastas de logs consultadas e todos os tipos/campos decodificados. Inclui acesso bruto a dados sem painel dedicado.",
         bool(streams))
-    add("Profundidade e pressão externa", "Painel futuro · depende de sensor", {"SCALED_PRESSURE2", "SCALED_PRESSURE3", "BARO", "CTUN"},
-        "Identificar sensor externo, instância, calibração e referência. Pressão interna ou altitude não comprovam profundidade.")
+    add("Profundidade máxima e média por operação", "Disponível nesta versão · depende de sensor", {"SCALED_PRESSURE2", "BARO"},
+        "Usa a profundidade informada pelo ArduSub (GLOBAL_POSITION_INT) somente quando o sensor externo é registrado. A média considera o tempo abaixo de 0,5 m. Pressão interna ou altitude estimada não comprovam profundidade.")
+    add("Operações com encerramento e limite de histórico", "Disponível nesta versão", set(),
+        "Cada operação agrupa as sessões do período. Ao encerrar, o resumo é congelado, o ZIP é gerado e a próxima operação começa. As operações encerradas mais antigas são removidas ao passar do limite configurado.",
+        True)
     add("Atitude, IMU, bússola e vibração", "Painel futuro", {"ATTITUDE", "AHRS", "AHRS2", "RAW_IMU", "SCALED_IMU", "SCALED_IMU2", "ATT", "IMU", "MAG", "VIBE"},
         "Tipos existentes podem ser consultados/exportados no inventário. Análise técnica e gráficos dedicados ficam para uma etapa posterior.")
     add("Posição, velocidade e trajetória", "Painel futuro · depende de sensor", {"GPS_RAW_INT", "GLOBAL_POSITION_INT", "LOCAL_POSITION_NED", "GPS", "POS"},

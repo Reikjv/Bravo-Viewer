@@ -87,6 +87,9 @@ def mav_records(path, kind):
         conn.close()
 
 
+SUBMERGED_METERS = 0.5
+
+
 class Summary:
     def __init__(self):
         self.value = {"records": 0, "bad_data": 0, "clock_issues": [], "statistics": {}, "statistics_observed": {}, "metrics": {}, "armed_periods": [], "observed_seconds": 0, "armed_seconds": 0, "gaps": 0}
@@ -94,6 +97,7 @@ class Summary:
         self.segment = 0
         self.heartbeat = None
         self.period = None
+        self.depth_previous = None
 
     def add(self, ts, name, origin, data, seq, kind, catalog):
         self.value["records"] += 1
@@ -135,6 +139,8 @@ class Summary:
                 self.finish_period("Desarmamento observado")
             self.heartbeat = (ts, armed, self.segment)
             self.value["active_armed_period"] = self.period.copy() if self.period else None
+        if origin in ("1:1", "dataflash:1"):
+            self.depth(ts, name, data)
         self.value["last_segment"] = self.segment
         selected = {"SYS_STATUS": ("voltage_battery", "current_battery", "load"), "BATTERY_STATUS": ("current_consumed", "energy_consumed", "temperature", "battery_remaining"), "BAT": ("Volt", "Curr", "CurrTot", "EnrgTot"), "SCALED_PRESSURE": ("press_abs", "temperature"), "SCALED_PRESSURE2": ("press_abs", "temperature"), "GLOBAL_POSITION_INT": ("relative_alt",)}
         if origin == "1:1" or kind == "bin":
@@ -150,6 +156,26 @@ class Summary:
                 metric["max"] = max(metric["max"], value)
                 metric["last"] = value
         return self.segment
+
+    def depth(self, ts, name, data):
+        """Profundidade informada pelo ArduSub; só é exibida com sensor externo registrado."""
+        depth = self.value.setdefault("depth", {"external": False, "max": None, "weighted": 0, "seconds": 0, "samples": 0})
+        if name == "SCALED_PRESSURE2" or name == "BARO":
+            depth["external"] = True
+            return
+        if name != "GLOBAL_POSITION_INT" or not isinstance(data.get("relative_alt"), (int, float)):
+            return
+        value = -data["relative_alt"] / 1000
+        depth["samples"] += 1
+        depth["max"] = value if depth["max"] is None else max(depth["max"], value)
+        previous = self.depth_previous
+        if previous and ts is not None and previous[0] is not None and previous[2] == self.segment:
+            dt = ts - previous[0]
+            # Média do tempo submerso: abaixo de 0,5 m e sem lacunas maiores que 5 s.
+            if 0 < dt <= 5 and previous[1] > SUBMERGED_METERS:
+                depth["seconds"] += dt
+                depth["weighted"] += previous[1] * dt
+        self.depth_previous = (ts, value, self.segment)
 
     def finish_period(self, reason):
         if self.period:
@@ -181,6 +207,11 @@ def import_file(store, source, source_key=None, progress=None, display_name=None
         old = db.execute("SELECT * FROM files WHERE source_key=?", (source_key,)).fetchone()
         if old and old["sha256"] == sha:
             return {"id": old["id"], "duplicate": True}
+        if old and old["operation_id"] is not None:
+            closed = db.execute("SELECT status FROM operations WHERE id=?", (old["operation_id"],)).fetchone()
+            if closed and closed["status"] == "closed":
+                # Operações encerradas são congeladas; a versão exportada continua válida.
+                return {"id": old["id"], "duplicate": True, "frozen": True}
         # Arquivos locais idênticos não são importados duas vezes com nomes diferentes.
         duplicate = db.execute("SELECT id FROM files WHERE sha256=?", (sha,)).fetchone()
         if duplicate:
@@ -228,6 +259,12 @@ def import_file(store, source, source_key=None, progress=None, display_name=None
                     progress(source.name, seq + 1)
         if batch:
             db.executemany("INSERT INTO records(file_id,stream_id,seq,ts,segment,data) VALUES(?,?,?,?,?,?)", batch)
+        if not old or old["operation_id"] is None:
+            # Arquivo novo entra na operação aberta, salvo quando todos os dados são anteriores a ela.
+            current = store.current_operation(db)
+            last = max((info["last"] for info in streams.values() if info["last"] is not None), default=None)
+            operation = current["id"] if last is None or last >= current["started_at"] - 300 else None
+            db.execute("UPDATE files SET operation_id=? WHERE id=?", (operation, file_id))
         summary.finish_period("Fim do arquivo ou sessão ainda aberta")
         summary.value["field_units"] = {str(info["id"]): info["units"] for info in streams.values() if info["units"]}
         summary.value["kind"] = kind

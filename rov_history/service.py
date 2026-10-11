@@ -46,6 +46,8 @@ class Service:
             allowed["equipment"] = updates["equipment"].strip()
         if "poll_seconds" in updates:
             allowed["poll_seconds"] = min(60, max(1, int(updates["poll_seconds"])))
+        if "operation_limit" in updates:
+            allowed["operation_limit"] = min(30, max(3, int(updates["operation_limit"])))
         old = self.store.config()
         result = self.store.configure(allowed)
         if old["host"] != result["host"]:
@@ -60,7 +62,7 @@ class Service:
                 for job in active:
                     if job["action"] == "sync" and job.get("host") == args.get("host"):
                         return job.copy()
-            if action == "bundle" and any(job["action"] == "bundle" for job in active):
+            if action in ("bundle", "close_operation") and any(job["action"] in ("bundle", "close_operation") for job in active):
                 raise ValueError("Uma exportação já está sendo preparada. Aguarde sua conclusão.")
             if len(active) >= 16:
                 raise ValueError("A fila de processamento está cheia. Aguarde os arquivos atuais.")
@@ -86,7 +88,7 @@ class Service:
                 job_id, action, args = self.queue.get(timeout=.5)
             except queue.Empty:
                 continue
-            self.jobs[job_id].update(status="running", progress="Iniciando")
+            self.jobs[job_id].update(status="running", progress="Iniciando", percent=0)
             def progress(name, count):
                 self.jobs[job_id]["progress"] = f"{name}: {count:,} registros"
             try:
@@ -96,7 +98,11 @@ class Service:
                     result = self.sync(args.get("host", self.store.config()["host"]), progress)
                 elif action == "bundle":
                     from .exporter import build_bundle
-                    result = build_bundle(self.store, job_id, args["context"], lambda text: self.jobs[job_id].update(progress=text), self.stop)
+                    result = build_bundle(self.store, job_id, args["context"], self.reporter(job_id), self.stop)
+                    if args["context"]["scope"] == "operation":
+                        self.store.set_operation_bundle(args["context"]["operation"], job_id)
+                elif action == "close_operation":
+                    result = self.close_operation(job_id, args)
                 else:
                     raise ValueError("Ação desconhecida")
                 self.jobs[job_id].update(status="done", progress="Concluído", result=result)
@@ -106,6 +112,28 @@ class Service:
                 self.queue.task_done()
                 if action == "import" and args.get("temporary"):
                     Path(args["path"]).unlink(missing_ok=True)
+
+    def reporter(self, job_id):
+        def report(text, percent=None):
+            self.jobs[job_id]["progress"] = text
+            if percent is not None:
+                self.jobs[job_id]["percent"] = max(0, min(100, round(percent)))
+        return report
+
+    def close_operation(self, job_id, args):
+        """Encerra, exporta a operação e aplica o limite de operações guardadas."""
+        from .exporter import build_bundle
+        report = self.reporter(job_id)
+        report("Encerrando a operação", 0)
+        ids = self.store.close_operation(args.get("values"))
+        context = {"scope": "operation", "operation": ids["closed"], "tab": "overview", "include_data": args.get("include_data", False), "include_originals": True}
+        result = build_bundle(self.store, job_id, context, lambda text, percent=None: report(text, None if percent is None else percent * .9), self.stop)
+        self.store.set_operation_bundle(ids["closed"], job_id)
+        removed = []
+        for old in self.store.expired_operations():
+            removed.append(self.store.delete_operation(old, lambda text: report(text, 95)))
+        report("Concluído", 100)
+        return {**result, **ids, "removed": removed}
 
     def sync(self, host, progress):
         client = BlueOS(host)
@@ -148,7 +176,8 @@ class Service:
         config = self.store.config()
         host = host or config["host"]
         date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        key = f"live:{host}:{date}"
+        operation = self.store.current_operation()
+        key = f"live:{host}:{date}:op{operation['id']}"
         entries = []
         markers = {}
         for sid, vehicle in cache.get("vehicles", {}).items():
@@ -204,7 +233,7 @@ class Service:
                     if active:
                         summary.value["armed_periods"].append({**active, "open": True, "reason": "Coleta interrompida antes do reinício"})
             else:
-                file_id = db.execute("INSERT INTO files(source_key,name,kind,path,size,imported_at) VALUES(?,?,'live','',0,?)", (key, f"Coleta {host} · {date} UTC", time.time())).lastrowid
+                file_id = db.execute("INSERT INTO files(source_key,name,kind,path,size,imported_at,operation_id) VALUES(?,?,'live','',0,?,?)", (key, f"Coleta {host} · {date} UTC · {operation['name']}", time.time(), operation["id"])).lastrowid
             seq = db.execute("SELECT coalesce(max(seq),-1) FROM records WHERE file_id=?", (file_id,)).fetchone()[0] + 1
             for ts, name, origin, data in entries:
                 stream = db.execute("SELECT id,fields FROM streams WHERE file_id=? AND type=? AND origin=?", (file_id, name, origin)).fetchone()

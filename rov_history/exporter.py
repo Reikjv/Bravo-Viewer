@@ -20,14 +20,14 @@ INDICATORS = {
     "BAT": {"Volt": "Tensão", "Curr": "Corrente", "CurrTot": "Consumo acumulado", "EnrgTot": "Energia acumulada"},
     "HEARTBEAT": {"_armed": "Estado armado"},
 }
-TABS = {"overview", "sessions", "charts", "events", "explorer", "files", "capabilities", "settings"}
+TABS = {"overview", "operations", "sessions", "charts", "events", "explorer", "files", "capabilities", "settings"}
 
 
 def validate_context(value):
     if not isinstance(value, dict):
         raise ValueError("Configuração de exportação inválida")
     scope, tab = value.get("scope", "all"), value.get("tab", "overview")
-    if scope not in ("all", "view") or tab not in TABS:
+    if scope not in ("all", "view", "operation") or tab not in TABS:
         raise ValueError("Escolha o conteúdo da exportação")
     result = {"scope": scope, "tab": tab}
     for name in ("include_data", "include_originals", "normalized"):
@@ -35,7 +35,7 @@ def validate_context(value):
         if not isinstance(v, bool):
             raise ValueError("Opção de exportação inválida")
         result[name] = v
-    for name in ("file", "stream"):
+    for name in ("file", "stream", "operation"):
         try:
             result[name] = int(value.get(name) or 0)
         except (TypeError, ValueError):
@@ -109,7 +109,30 @@ def chart_svg(series, label):
     return f'<svg viewBox="0 0 780 250" role="img" aria-label="{e(label)}"><rect width="780" height="250" rx="14" fill="#f4f9fa"/>{grid}<text x="8" y="24">{hi:.4g}</text><text x="8" y="210">{lo:.4g}</text>{areas}{lines}<text x="65" y="238">Registro {first} → {last} · {e(series["unit"])}</text></svg>'
 
 
-def build_bundle(store, identifier, context, progress=lambda text: None, stop=None):
+def duration_text(seconds):
+    seconds = int(seconds or 0)
+    return f"{seconds // 3600} h {seconds % 3600 // 60} min"
+
+
+def operation_section(op):
+    s = op["summary"]
+    depth = s.get("depth", {})
+    number = lambda v, unit="", digits=2: "—" if v is None else f"{v:.{digits}f} {unit}".strip()
+    rows = [["Operação", op["name"]], ["Local", op["location"] or "—"], ["Cliente / serviço", op["client"] or "—"],
+            ["Início UTC", utc(op["started_at"])], ["Encerramento UTC", utc(op["ended_at"]) or "Em andamento"],
+            ["Sessões", s.get("sessions", 0)], ["Registros", s.get("records", 0)],
+            ["Tempo observado", duration_text(s.get("observed_seconds"))], ["Tempo armado", duration_text(s.get("armed_seconds"))],
+            ["Profundidade máxima", number(depth.get("max"), "m") if depth.get("available") else "Sem sensor de profundidade registrado"],
+            ["Profundidade média submersa", number(depth.get("mean"), "m") if depth.get("available") else "—"],
+            ["Tempo submerso (abaixo de 0,5 m)", duration_text(depth.get("submerged_seconds")) if depth.get("available") else "—"]]
+    for key, label in (("voltage_min", "Tensão mínima"), ("current_max", "Corrente máxima"), ("consumption", "Consumo registrado")):
+        if s.get(key):
+            rows.append([label, number(s[key]["value"], s[key]["unit"], 3)])
+    notes = f'<p>{html.escape(op["notes"])}</p>' if op["notes"] else ""
+    return '<h2>Operação</h2>' + report_table(["Informação", "Valor"], rows) + notes
+
+
+def build_bundle(store, identifier, context, progress=lambda text, percent=None: None, stop=None):
     context = validate_context(context)
     if not re.fullmatch(r"[a-f0-9]{32}", identifier):
         raise ValueError("Identificador de exportação inválido")
@@ -124,11 +147,34 @@ def build_bundle(store, identifier, context, progress=lambda text: None, stop=No
     manifest = {"application": "Bravo Viewer", "version": __version__, "generated_at_utc": utc(time.time()), "selection": context, "entries": []}
     root = "Bravo-Viewer/"
     charts_html = []
+    # Progresso proporcional aos registros lidos e aos bytes de originais copiados.
+    work = {"total": 1, "done": 0, "text": "Preparando exportação"}
+    def advance(count=0, text=None):
+        work["done"] += count
+        if text:
+            work["text"] = text
+        progress(work["text"], min(99, 100 * work["done"] / work["total"]))
+    def counted(rows):
+        pending = 0
+        for row in rows:
+            pending += 1
+            if pending == 2000:
+                advance(pending); pending = 0
+            yield row
+        advance(pending)
     try:
         with store.snapshot() as snap, zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1, allowZip64=True) as archive:
             files, streams = snap.files(), snap.streams()
             overview, grid, config = snap.overview(), capabilities(snap), snap.config()
-            all_scope, tab = context["scope"] == "all", context["tab"]
+            all_scope, tab = context["scope"] in ("all", "operation"), context["tab"]
+            operation = None
+            if context["scope"] == "operation":
+                operation = next((op for op in snap.operations() if op["id"] == context["operation"]), None)
+                if operation is None:
+                    raise ValueError("Operação não encontrada")
+                files = [f for f in files if f["operation_id"] == operation["id"]]
+                streams = [s for s in streams if s["file_id"] in {f["id"] for f in files}]
+                manifest["operation"] = {k: operation[k] for k in ("id", "name", "location", "client", "notes", "started_at", "ended_at", "summary")}
             if not all_scope:
                 if tab in ("sessions", "charts", "explorer", "events") and context["file"]:
                     files = [f for f in files if f["id"] == context["file"]]
@@ -147,6 +193,14 @@ def build_bundle(store, identifier, context, progress=lambda text: None, stop=No
             manifest["files"] = [{k: f[k] for k in ("id", "name", "source_key", "kind", "sha256", "size", "note")} for f in files]
             def add_json(name, value):
                 archive.writestr(root + name, dumps(value) + "\n")
+            raw_streams = streams if all_scope else streams if tab == "explorer" else []
+            chart_streams = streams if all_scope or tab in ("charts", "overview", "sessions") else []
+            work["total"] = max(1, sum(s["count"] * 2 for s in raw_streams) * context["include_data"]
+                                + sum(s["count"] * (1 + context["include_data"] * len(INDICATORS[s["type"]])) for s in chart_streams if s["type"] in INDICATORS)
+                                + (sum(f["size"] or 0 for f in files) // 200 if context["include_originals"] else 0))
+            advance(0, "Resumo e ocorrências")
+            if operation:
+                add_json("resumo/operacao.json", manifest["operation"])
             add_json("resumo/visao_geral.json", overview if all_scope or tab == "overview" else {"equipment": config["equipment"], "sessions": files})
             add_json("resumo/sessoes.json", files)
             if all_scope or tab == "settings":
@@ -158,7 +212,7 @@ def build_bundle(store, identifier, context, progress=lambda text: None, stop=No
             periods = ([f["id"], utc(p.get("start")), utc(p.get("end")), p.get("observed_seconds", 0), p.get("open", True), p.get("reason", "Em andamento")] for f in files for p in [*f["summary"].get("armed_periods", []), *([f["summary"]["active_armed_period"]] if f["summary"].get("active_armed_period") else [])])
             write_csv(archive, root + "resumo/periodos_armados.csv", ["Sessão", "Início UTC", "Fim observado UTC", "Tempo observado s", "Aberto/incompleto", "Encerramento"], periods, check)
             add_json("inventario/tipos_e_campos.json", streams)
-            if all_scope or tab == "files":
+            if context["scope"] == "all" or tab == "files":
                 inventory_path = store.directory / "remote_inventory.json"
                 remote = json.loads(inventory_path.read_text(encoding="utf-8")) if inventory_path.exists() else {"files": [], "errors": []}
                 if not all_scope and context["search"]:
@@ -181,10 +235,9 @@ def build_bundle(store, identifier, context, progress=lambda text: None, stop=No
                                 events.append(values)
                             yield values
                 write_csv(archive, root + "ocorrencias/ocorrencias.csv", ["Data UTC", "Fonte", "Nível", "Tipo", "Mensagem", "Sequência"], event_rows(), check)
-            raw_streams = streams if all_scope else streams if tab == "explorer" else []
             if context["include_data"]:
                 for index, stream in enumerate(raw_streams):
-                    check(); progress(f"Dados completos: {index + 1}/{len(raw_streams)} tipos/origens")
+                    check(); advance(0, f"Dados completos: {index + 1}/{len(raw_streams)} tipos/origens")
                     readable = re.sub(r'[^a-zA-Z0-9_.-]', '_', stream['type'] + '_' + stream['origin'])[:100]
                     folder = f"dados/sessao_{stream['file_id']:06d}/tipo_{stream['id']:06d}_{readable}"
                     fields = stream["fields"]
@@ -199,13 +252,13 @@ def build_bundle(store, identifier, context, progress=lambda text: None, stop=No
                             for row in db.execute("SELECT seq,ts,segment,data FROM records WHERE stream_id=? ORDER BY seq", (stream["id"],)):
                                 values = flatten(json.loads(row["data"]))
                                 yield [row["seq"], utc(row["ts"]), row["segment"], *[values.get(f, "") for f in fields]]
-                    write_csv(archive, root + folder + ".csv", ["Sequência", "Data UTC", "Trecho", *fields], raw_rows(), check)
+                    write_csv(archive, root + folder + ".csv", ["Sequência", "Data UTC", "Trecho", *fields], counted(raw_rows()), check)
                     with archive.open(root + folder + ".jsonl", "w", force_zip64=True) as output:
                         for index, chunk in enumerate(snap.export(stream["id"], "jsonl")):
                             if index % 1000 == 0: check()
                             output.write(chunk)
+                    advance(stream["count"])
                     manifest["entries"].append({"type": stream["type"], "origin": stream["origin"], "session": stream["file_id"], "records": stream["count"], "csv": folder + ".csv", "jsonl": folder + ".jsonl", "csv_fields": fields})
-            chart_streams = streams if all_scope or tab in ("charts", "overview", "sessions") else []
             for stream in chart_streams:
                 if stream["type"] not in INDICATORS or not (stream["origin"] == "1:1" or stream["kind"] == "bin"):
                     continue
@@ -217,9 +270,10 @@ def build_bundle(store, identifier, context, progress=lambda text: None, stop=No
                 for field, label in fields.items():
                     if field != "_armed" and field not in stream["fields"]:
                         continue
-                    check(); progress(f"Gráficos e séries: {stream['file_name']} · {label}")
+                    check(); advance(0, f"Gráficos e séries: {stream['file_name']} · {label}")
                     normalized = context["normalized"] if tab == "charts" and not all_scope else True
                     series = snap.series(stream["id"], field, 350, normalized)
+                    advance(stream["count"] // max(1, len(fields)))
                     filename = f"energia/sessao_{stream['file_id']:06d}_tipo_{stream['id']:06d}_{field}.csv"
                     def measured_rows():
                         with snap.db() as db:
@@ -236,8 +290,12 @@ def build_bundle(store, identifier, context, progress=lambda text: None, stop=No
                                     measure = {"value": raw, "valid": raw is not None}
                                 value = (measure["value"] if normalized else raw) if measure["valid"] else None
                                 yield [row["seq"], utc(row["ts"]), row["segment"], value, raw, series["unit"]]
-                    write_csv(archive, root + filename, ["Sequência", "Data UTC", "Trecho", label, "Valor registrado", "Unidade exibida"], measured_rows(), check)
-                    charts_html.append(f'<article><h3>{html.escape(label)} · {html.escape(stream["file_name"])}</h3>{chart_svg(series, label)}<a href="{filename}">Série completa CSV</a></article>')
+                    link = ""
+                    # Sem tabelas completas, o gráfico basta; a série CSV seria uma segunda leitura.
+                    if context["include_data"]:
+                        write_csv(archive, root + filename, ["Sequência", "Data UTC", "Trecho", label, "Valor registrado", "Unidade exibida"], counted(measured_rows()), check)
+                        link = f'<a href="{filename}">Série completa CSV</a>'
+                    charts_html.append(f'<article><h3>{html.escape(label)} · {html.escape(stream["file_name"])}</h3>{chart_svg(series, label)}{link}</article>')
             if context["include_originals"]:
                 for file in files:
                     check()
@@ -245,15 +303,17 @@ def build_bundle(store, identifier, context, progress=lambda text: None, stop=No
                     path = Path(actual["path"]).resolve()
                     if not path.is_relative_to((store.directory / "originals").resolve()) or not path.is_file():
                         continue
-                    progress(f"Copiando original: {file['name']}")
+                    advance(0, f"Copiando original: {file['name']}")
                     name = f"originais/sessao_{file['id']:06d}{path.suffix}"
                     with path.open("rb") as source, archive.open(root + name, "w", force_zip64=True) as output:
-                        while chunk := source.read(65536):
-                            check(); output.write(chunk)
+                        while chunk := source.read(1048576):
+                            check(); output.write(chunk); advance(len(chunk) // 200)
                     manifest.setdefault("originals", []).append({"name": file["name"], "archive": name, "sha256": file["sha256"]})
             sections = ['<h2>Sessões e operações</h2>' + report_table(["Fonte", "Registros", "Tempo observado s", "Tempo armado s", "Observações"], [[f["name"], f["summary"].get("records", 0), f["summary"].get("observed_seconds", 0), f["summary"].get("armed_seconds", 0), f["note"]] for f in files])]
             if all_scope or tab == "overview":
                 sections.insert(0, '<h2>Horas e contadores registrados</h2>' + report_table(["Contador", "Último valor"], overview["statistics"].items()))
+            if operation:
+                sections.insert(0, operation_section(operation))
             if charts_html: sections.append('<h2>Energia e gráficos</h2>' + ''.join(charts_html))
             if events: sections.append('<h2>Ocorrências · prévia de até 200 mensagens</h2>' + report_table(["Data UTC", "Fonte", "Nível", "Tipo", "Mensagem", "Sequência"], events) + '<a href="ocorrencias/ocorrencias.csv">Todas as ocorrências selecionadas</a>')
             if all_scope or tab == "capabilities":
@@ -264,7 +324,7 @@ def build_bundle(store, identifier, context, progress=lambda text: None, stop=No
                 sections.append('<h2>Arquivos preservados</h2>' + report_table(["Arquivo", "Formato", "Bytes", "Tipos/origens", "Hash SHA256"], [[f["name"], f["kind"], f["size"], f["stream_count"], f["sha256"]] for f in files]))
             if all_scope or tab == "settings":
                 sections.append('<h2>Equipamento e coleta</h2>' + report_table(["Configuração", "Valor"], config.items()))
-            report = f'<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Bravo Viewer · relatório</title><style>body{{font:14px system-ui;color:#183c49;background:#f7fbfb;margin:35px auto;padding:20px;max-width:1150px;line-height:1.55}}h1{{font-size:30px;margin:12px 0 4px}}h2{{margin-top:38px;font-size:19px}}h3{{margin:0 0 12px;font-size:15px}}th,td{{padding:10px 12px;border-bottom:1px solid #e2ecee;text-align:left;vertical-align:top;overflow-wrap:anywhere}}th{{background:#eaf3f4;font-size:11px;text-transform:uppercase;letter-spacing:.5px}}tr:last-child td{{border-bottom:0}}table{{border-collapse:separate;border-spacing:0;width:100%;font-size:12px}}.table{{overflow:auto;background:#fff;border:1px solid #d8e4e7;border-radius:14px}}article{{background:#fff;border:1px solid #d8e4e7;border-radius:16px;padding:20px;margin:18px 0;box-shadow:0 6px 20px -14px #183c4966}}svg{{width:100%;height:auto;max-height:320px;display:block;margin-bottom:10px}}svg text{{font:12px system-ui;fill:#56737d}}a{{color:#217987;font-weight:600}}footer{{margin-top:40px;border-top:1px solid #d8e4e7;padding-top:15px;color:#56737d}}</style><svg width="0" height="0" style="position:absolute"><defs><linearGradient id="bv-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#217987" stop-opacity=".25"/><stop offset="1" stop-color="#217987" stop-opacity="0"/></linearGradient></defs></svg><h1>Bravo Viewer</h1><p>{html.escape(config["equipment"])} · {manifest["generated_at_utc"]}</p><p>Exportação: {"todo o histórico" if all_scope else "visão atual · " + html.escape(tab)}. Dados completos em CSV/JSONL; gráficos são uma redução que mantém extremos e segmentos. Datas em UTC. Contadores e acumuladores não são somados entre fontes.</p>' + ''.join(sections) + '<footer>Bravo Viewer · desenvolvido por Reikjv</footer></html>'
+            report = f'<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Bravo Viewer · relatório</title><style>body{{font:14px system-ui;color:#183c49;background:#f7fbfb;margin:35px auto;padding:20px;max-width:1150px;line-height:1.55}}h1{{font-size:30px;margin:12px 0 4px}}h2{{margin-top:38px;font-size:19px}}h3{{margin:0 0 12px;font-size:15px}}th,td{{padding:10px 12px;border-bottom:1px solid #e2ecee;text-align:left;vertical-align:top;overflow-wrap:anywhere}}th{{background:#eaf3f4;font-size:11px;text-transform:uppercase;letter-spacing:.5px}}tr:last-child td{{border-bottom:0}}table{{border-collapse:separate;border-spacing:0;width:100%;font-size:12px}}.table{{overflow:auto;background:#fff;border:1px solid #d8e4e7;border-radius:14px}}article{{background:#fff;border:1px solid #d8e4e7;border-radius:16px;padding:20px;margin:18px 0;box-shadow:0 6px 20px -14px #183c4966}}svg{{width:100%;height:auto;max-height:320px;display:block;margin-bottom:10px}}svg text{{font:12px system-ui;fill:#56737d}}a{{color:#217987;font-weight:600}}footer{{margin-top:40px;border-top:1px solid #d8e4e7;padding-top:15px;color:#56737d}}</style><svg width="0" height="0" style="position:absolute"><defs><linearGradient id="bv-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#217987" stop-opacity=".25"/><stop offset="1" stop-color="#217987" stop-opacity="0"/></linearGradient></defs></svg><h1>Bravo Viewer</h1><p>{html.escape(config["equipment"])} · {manifest["generated_at_utc"]}</p><p>Exportação: {"operação · " + html.escape(operation["name"]) if operation else "todo o histórico" if all_scope else "visão atual · " + html.escape(tab)}. Dados completos em CSV/JSONL; gráficos são uma redução que mantém extremos e segmentos. Datas em UTC. Contadores e acumuladores não são somados entre fontes.</p>' + ''.join(sections) + '<footer>Bravo Viewer · desenvolvido por Reikjv</footer></html>'
             web = Path(__file__).resolve().parents[1] / "web"
             for filename in ("brs.png", "brand.png"):
                 archive.write(web / filename, root + "assets/" + filename)

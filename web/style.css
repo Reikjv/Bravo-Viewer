@@ -122,7 +122,7 @@ tbody tr:hover td{background:#12303b}
 tbody{animation:page-in .35s ease both}
 td .secondary{font-size:10.5px;padding:6px 11px;border-radius:8px}
 td strong{font-size:11.5px;font-weight:560;display:block}
-td small{font-size:10px;color:var(--muted)}
+td small{display:block;margin-top:2px;font-size:10px;color:var(--muted)}
 .numeric{font-variant-numeric:tabular-nums;white-space:nowrap}
 .file-name{min-width:220px}
 .severity{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;background:#183844;color:var(--light);font-size:10px;font-weight:550;white-space:nowrap}
@@ -215,3 +215,16 @@ dialog .checkbox{margin:14px 0}
 @media(max-width:1150px){main{padding:28px 24px}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.two-columns{grid-template-columns:1fr}.filters{grid-template-columns:repeat(2,minmax(0,1fr))}.import-panel{flex-wrap:wrap}.import-panel>div{flex-basis:100%}}
 @media(max-width:760px){aside{position:static;width:100%;padding:16px;border-right:0;border-bottom:1px solid var(--line-soft)}.nav-label,.sidebar-bottom{display:none}nav{flex-direction:row;overflow:auto;margin-top:14px;gap:4px}nav button{padding:9px 12px;flex-shrink:0}nav button .icon,nav button:before{display:none}main{margin-left:0;padding:22px 16px}header{align-items:flex-start;flex-direction:column;gap:14px}h1{font-size:26px}.kpis{gap:10px}.kpis article{padding:16px 14px}.kpis strong{font-size:24px}.kpi-icon{display:none}.panel{padding:17px}.equipment-line .text-link{display:none}.measurements strong{font-size:19px}.section-toolbar{align-items:flex-start;flex-direction:column;gap:10px}.filters{gap:12px}.chart-container{height:290px}.import-panel .upload-button,.import-panel button{flex:1}footer{gap:12px;flex-direction:column;align-items:flex-start}}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}}
+.operation-card{background:linear-gradient(120deg,#133844,#0f2530 55%,var(--panel));border-color:#28525e}
+.operation-card .panel-head{align-items:flex-start;margin-bottom:6px}
+.operation-card h2{font-size:19px;margin:4px 0 2px}
+.op-actions,.op-buttons{display:flex;gap:8px;flex-wrap:wrap}
+.op-form{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px 16px;align-items:end;margin-bottom:6px}
+.op-form label{font-size:10.5px;color:var(--muted);font-weight:550}
+.op-notes{grid-column:1/-1}
+.op-buttons{grid-column:1/-1}
+.progress{position:relative;height:8px;border-radius:999px;background:#0a1b23;border:1px solid var(--line-soft);overflow:hidden;margin:14px 0 0}
+.progress span{position:absolute;inset:0;transform-origin:left;transform:scaleX(var(--p,0));background:linear-gradient(90deg,var(--accent-2),var(--light));border-radius:999px;transition:transform .4s var(--ease)}
+.job .progress{flex:1;max-width:320px;margin:0 0 0 auto}
+.badge-ok{color:var(--green)}.badge-warn{color:var(--amber)}
+@media(max-width:1150px){.op-form{grid-template-columns:1fr}}

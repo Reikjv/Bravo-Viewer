@@ -92,6 +92,8 @@ def create_server(service, host="127.0.0.1", port=8090):
                 return self.response({**service.status(), "version": __version__})
             if path == "/api/overview":
                 return self.response(service.store.overview())
+            if path == "/api/operations":
+                return self.response({"operations": service.store.operations(), "limit": service.store.operation_limit()})
             if path == "/api/files":
                 return self.response(service.store.files())
             if path == "/api/streams":
@@ -132,6 +134,7 @@ def create_server(service, host="127.0.0.1", port=8090):
                     with filepath.open("rb") as source:
                         while chunk := source.read(65536):
                             yield chunk
+                    service.store.mark_bundle_downloaded(identifier)
                 return self.download(chunks(), "bravo-viewer-" + identifier[:8] + ".zip", "application/zip")
             if path == "/api/original":
                 file = service.store.file(integer("file"))
@@ -211,6 +214,17 @@ def create_server(service, host="127.0.0.1", port=8090):
                 if action == "bundle":
                     from .exporter import validate_context
                     return self.response(service.submit("bundle", context=validate_context(body)), 202)
+                if action == "operation":
+                    return self.response(service.store.update_operation(body))
+                if action == "operation-close":
+                    values = body.get("values") or {}
+                    if not isinstance(values, dict) or not isinstance(body.get("include_data", False), bool):
+                        raise ValueError("Dados da operação inválidos")
+                    return self.response(service.submit("close_operation", values=values, include_data=body.get("include_data", False)), 202)
+                if action == "operation-export":
+                    from .exporter import validate_context
+                    context = validate_context({"scope": "operation", "operation": body.get("id"), "include_data": body.get("include_data", False), "include_originals": True})
+                    return self.response(service.submit("bundle", context=context), 202)
                 if action == "note":
                     service.store.note(int(body["file"]), str(body["note"]))
                     return self.response({"ok": True})
