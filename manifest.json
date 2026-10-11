@@ -1,0 +1,68 @@
+[
+  {
+    "identifier": "brs.bravo-viewer",
+    "name": "Bravo Viewer",
+    "website": "https://github.com/Reikjv/Bravo-Viewer",
+    "docker": "ghcr.io/reikjv/bravo-viewer",
+    "description": "Horas, operações, energia e ocorrências do ROV, com gráficos, inventário e exportação organizada.",
+    "extension_logo": "https://raw.githubusercontent.com/Reikjv/Bravo-Viewer/main/logo.png",
+    "company_logo": "https://raw.githubusercontent.com/Reikjv/Bravo-Viewer/main/logo.png",
+    "versions": {
+      "0.2.0-beta.1": {
+        "tag": "0.2.0-beta.1",
+        "type": "tool",
+        "images": [
+          {
+            "expanded_size": 265680420,
+            "digest": "sha256:633ada287528aac76d6582d9a940c674d2a54b697f2acb5d471856ac3e58f47f",
+            "platform": {
+              "architecture": "arm64",
+              "variant": null,
+              "os": "linux"
+            }
+          },
+          {
+            "expanded_size": 240479400,
+            "digest": "sha256:03a8cce57ba92016fab8cee0b5dd873122278680797107168c67ff9869b3dd66",
+            "platform": {
+              "architecture": "arm",
+              "variant": "v7",
+              "os": "linux"
+            }
+          }
+        ],
+        "authors": [
+          {
+            "name": "Reikjv",
+            "email": "141414061+Reikjv@users.noreply.github.com"
+          }
+        ],
+        "filter_tags": [
+          "logs",
+          "history",
+          "monitoring",
+          "export"
+        ],
+        "extra_links": {
+          "github": "https://github.com/Reikjv/Bravo-Viewer"
+        },
+        "website": "https://github.com/Reikjv/Bravo-Viewer",
+        "readme": "https://raw.githubusercontent.com/Reikjv/Bravo-Viewer/main/README.md",
+        "company": {
+          "name": "BRS",
+          "about": "Bravo Viewer · histórico e diagnóstico do ROV"
+        },
+        "permissions": {
+          "HostConfig": {
+            "NetworkMode": "host",
+            "Memory": 268435456,
+            "NanoCpus": 500000000,
+            "Binds": [
+              "/usr/blueos/extensions/reikjv-rov-history:/data"
+            ]
+          }
+        }
+      }
+    }
+  }
+]
