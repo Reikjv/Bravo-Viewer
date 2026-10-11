@@ -2,6 +2,10 @@
 
 Repositório principal: [Reikjv/Bravo-Viewer](https://github.com/Reikjv/Bravo-Viewer). Código, testes, catálogo e documentação de uso estão nesse repositório. A pasta local usa esse endereço como `origin`; o histórico inicial ficou no remoto `legacy` e na branch `legacy-main`. Os documentos anteriores da inspeção também foram preservados em `data/legacy_documents/`, fora da branch publicada. Capturas e bancos locais permanecem em `data/`, fora do Git.
 
+## Beta 0.3.2-beta.1
+
+Buscas automáticas em fila própria; logs em gravação não são reimportados a cada busca; limite fixo de 20 operações; exportação leve por padrão. Motivo: no Navigator, logs de serviço que crescem continuamente eram reimportados a cada 5 minutos e uma exportação completa de 907 tipos/origens bloqueava a fila. [Release](https://github.com/Reikjv/Bravo-Viewer/releases/tag/v0.3.2-beta.1); download anônimo confirmado.
+
 ## Beta 0.3.1-beta.1
 
 Encerrar operação busca os logs do BlueOS antes de congelar o resumo. O catálogo passa a usar `catalog/card.png` (imagem no formato do card) e `catalog/reikjv.png` (logo do desenvolvedor), com o nome do projeto na linha inferior. [Release](https://github.com/Reikjv/Bravo-Viewer/releases/tag/v0.3.1-beta.1) gerada pelo [workflow](https://github.com/Reikjv/Bravo-Viewer/actions/runs/38171406179); download anônimo confirmado.
