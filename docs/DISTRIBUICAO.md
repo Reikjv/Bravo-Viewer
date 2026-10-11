@@ -30,4 +30,6 @@ Referências: [visibilidade e permissões de pacotes](https://docs.github.com/en
 
 ## Validação no equipamento
 
-O endereço 192.168.2.2 respondeu às consultas iniciais, mas deixou de responder ao final da publicação. A inclusão do novo catálogo e a instalação no Navigator ainda não foram verificadas. Siga o [guia de bancada](GUIA_TESTES.md) quando o equipamento estiver acessível. Resultados de carga locais estão em [ESTABILIDADE.md](ESTABILIDADE.md); não substituem um ensaio prolongado no ROV.
+Em 10/10/2026, o BlueOS em 192.168.2.2 voltou a responder. A API confirmou que a fonte **Reikjv Bravo-Viewer** já está cadastrada e habilitada com o endereço acima, e que a versão `0.2.0-beta.1` aparece no catálogo. A imagem ARMv7 foi reconhecida como compatível com esse equipamento; a ARM64 não é compatível com a instalação atual.
+
+A consulta às extensões instaladas ainda não encontrou o Bravo Viewer. O download automático permanece dependente da liberação pública do pacote GHCR. Após a instalação, siga o [guia de bancada](GUIA_TESTES.md) para validar a execução no Navigator. Resultados de carga locais estão em [ESTABILIDADE.md](ESTABILIDADE.md); não substituem um ensaio prolongado no ROV.
