@@ -2,6 +2,10 @@
 
 Repositório principal: [Reikjv/Bravo-Viewer](https://github.com/Reikjv/Bravo-Viewer). Código, testes, catálogo e documentação de uso estão nesse repositório. A pasta local usa esse endereço como `origin`; o histórico inicial ficou no remoto `legacy` e na branch `legacy-main`. Os documentos anteriores da inspeção também foram preservados em `data/legacy_documents/`, fora da branch publicada. Capturas e bancos locais permanecem em `data/`, fora do Git.
 
+## Beta 0.3.1-beta.1
+
+Encerrar operação busca os logs do BlueOS antes de congelar o resumo. O catálogo passa a usar `catalog/card.png` (imagem no formato do card) e `catalog/reikjv.png` (logo do desenvolvedor), com o nome do projeto na linha inferior. [Release](https://github.com/Reikjv/Bravo-Viewer/releases/tag/v0.3.1-beta.1) gerada pelo [workflow](https://github.com/Reikjv/Bravo-Viewer/actions/runs/38171406179); download anônimo confirmado.
+
 ## Beta 0.3.0-beta.1
 
 Operações com encerramento, ZIP leve com progresso, limite de operações guardadas (padrão 10) e profundidade máxima/média condicionada ao sensor externo. Gerada pelo [workflow](https://github.com/Reikjv/Bravo-Viewer/actions/runs/38170213192) da tag `v0.3.0-beta.1`, com testes, controles DOM/API, imagens ARM64/ARMv7 e [release](https://github.com/Reikjv/Bravo-Viewer/releases/tag/v0.3.0-beta.1) concluídos; download anônimo da imagem confirmado. A atualização migra o histórico existente para a Operação 1. Em cópia local de 1.054.950 registros, encerrar a operação com ZIP leve levou 2,5 s no computador de desenvolvimento; no Navigator, espere tempos maiores. A fonte do catálogo no BlueOS usa `?v=<versão>` para forçar nova leitura.
