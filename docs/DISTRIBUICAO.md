@@ -2,6 +2,10 @@
 
 Repositório principal: [Reikjv/Bravo-Viewer](https://github.com/Reikjv/Bravo-Viewer). Código, testes, catálogo e documentação de uso estão nesse repositório. A pasta local usa esse endereço como `origin`; o histórico inicial ficou no remoto `legacy` e na branch `legacy-main`. Os documentos anteriores da inspeção também foram preservados em `data/legacy_documents/`, fora da branch publicada. Capturas e bancos locais permanecem em `data/`, fora do Git.
 
+## Beta 0.3.0-beta.1
+
+Operações com encerramento, ZIP leve com progresso, limite de operações guardadas (padrão 10) e profundidade máxima/média condicionada ao sensor externo. Gerada pelo [workflow](https://github.com/Reikjv/Bravo-Viewer/actions/runs/38170213192) da tag `v0.3.0-beta.1`, com testes, controles DOM/API, imagens ARM64/ARMv7 e [release](https://github.com/Reikjv/Bravo-Viewer/releases/tag/v0.3.0-beta.1) concluídos; download anônimo da imagem confirmado. A atualização migra o histórico existente para a Operação 1. Em cópia local de 1.054.950 registros, encerrar a operação com ZIP leve levou 2,5 s no computador de desenvolvimento; no Navigator, espere tempos maiores. A fonte do catálogo no BlueOS usa `?v=<versão>` para forçar nova leitura.
+
 ## Beta 0.2.1-beta.1
 
 Renovação visual da interface e do relatório exportado, sem mudança de dados ou API. Gerada pelo [workflow do Bravo-Viewer](https://github.com/Reikjv/Bravo-Viewer/actions/runs/38103513422) a partir da tag `v0.2.1-beta.1`: testes, controles DOM/API, inicialização das imagens ARM64/ARMv7 sob QEMU e [release](https://github.com/Reikjv/Bravo-Viewer/releases/tag/v0.2.1-beta.1) concluídos. O catálogo lista 0.2.1-beta.1 e 0.2.0-beta.1. Em 10/10/2026, após o pacote GHCR ficar público e receber acesso de escrita deste repositório, o download anônimo dos índices das duas versões foi confirmado.
