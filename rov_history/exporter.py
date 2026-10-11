@@ -85,25 +85,28 @@ def chart_svg(series, label):
     pad = max((hi - lo) * .1, abs(hi) * .002, .001)
     lower, upper = lo - pad, hi + pad
     first, last = points[0]["seq"], points[-1]["seq"]
-    paths, path, previous = [], [], None
+    segments, segment, previous = [], [], None
     for p in points:
         if p["value"] is None or previous and p["segment"] != previous["segment"]:
-            if path:
-                paths.append(" ".join(path)); path = []
+            if segment:
+                segments.append(segment); segment = []
             previous = None
         if p["value"] is None:
             continue
         x, y = 65 + (p["seq"] - first) / (last - first or 1) * 680, 18 + (upper - p["value"]) / (upper - lower) * 195
         if previous and series["field"] == "_armed":
-            old_y = 18 + (upper - previous["value"]) / (upper - lower) * 195
-            path.append(f"L{x:.2f},{old_y:.2f}")
-        path.append(f"{'L' if path else 'M'}{x:.2f},{y:.2f}")
+            segment.append((x, segment[-1][1]))
+        segment.append((x, y))
         previous = p
-    if path:
-        paths.append(" ".join(path))
-    lines = ''.join(f'<path d="{p}" fill="none" stroke="#217987" stroke-width="2"/>' for p in paths)
+    if segment:
+        segments.append(segment)
+    coords = lambda seg: " L".join(f"{x:.2f},{y:.2f}" for x, y in seg)
+    # Área sob cada trecho contínuo; o gradiente é declarado uma vez no relatório.
+    areas = ''.join(f'<path d="M{seg[0][0]:.2f},213 L{coords(seg)} L{seg[-1][0]:.2f},213 Z" fill="url(#bv-area)"/>' for seg in segments)
+    lines = ''.join(f'<path d="M{coords(seg)}" fill="none" stroke="#217987" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>' for seg in segments)
+    grid = ''.join(f'<line x1="65" x2="745" y1="{18 + i * 195 / 4:.1f}" y2="{18 + i * 195 / 4:.1f}" stroke="#d6e5e8" stroke-dasharray="3 5"/>' for i in range(5))
     e = html.escape
-    return f'<svg viewBox="0 0 780 250" role="img" aria-label="{e(label)}"><rect width="780" height="250" fill="#f1f7f8"/><text x="8" y="24">{hi:.4g}</text><text x="8" y="210">{lo:.4g}</text>{lines}<text x="65" y="238">Registro {first} → {last} · {e(series["unit"])}</text></svg>'
+    return f'<svg viewBox="0 0 780 250" role="img" aria-label="{e(label)}"><rect width="780" height="250" rx="14" fill="#f4f9fa"/>{grid}<text x="8" y="24">{hi:.4g}</text><text x="8" y="210">{lo:.4g}</text>{areas}{lines}<text x="65" y="238">Registro {first} → {last} · {e(series["unit"])}</text></svg>'
 
 
 def build_bundle(store, identifier, context, progress=lambda text: None, stop=None):
@@ -261,7 +264,7 @@ def build_bundle(store, identifier, context, progress=lambda text: None, stop=No
                 sections.append('<h2>Arquivos preservados</h2>' + report_table(["Arquivo", "Formato", "Bytes", "Tipos/origens", "Hash SHA256"], [[f["name"], f["kind"], f["size"], f["stream_count"], f["sha256"]] for f in files]))
             if all_scope or tab == "settings":
                 sections.append('<h2>Equipamento e coleta</h2>' + report_table(["Configuração", "Valor"], config.items()))
-            report = f'<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Bravo Viewer · relatório</title><style>body{{font:14px system-ui;color:#183c49;margin:35px auto;padding:20px;max-width:1150px}}h1{{font-size:30px}}h2{{margin-top:35px}}th,td{{padding:9px;border-bottom:1px solid #d8e4e7;text-align:left;vertical-align:top;overflow-wrap:anywhere}}th{{background:#edf4f5}}table{{border-collapse:collapse;width:100%;font-size:12px}}.table{{overflow:auto}}article{{border:1px solid #d8e4e7;border-radius:8px;padding:18px;margin:18px 0}}svg{{width:100%;height:auto;max-height:320px}}svg text{{font:12px system-ui}}a{{color:#217987}}footer{{margin-top:40px;border-top:1px solid #d8e4e7;padding-top:15px}}</style><h1>Bravo Viewer</h1><p>{html.escape(config["equipment"])} · {manifest["generated_at_utc"]}</p><p>Exportação: {"todo o histórico" if all_scope else "visão atual · " + html.escape(tab)}. Dados completos em CSV/JSONL; gráficos são uma redução que mantém extremos e segmentos. Datas em UTC. Contadores e acumuladores não são somados entre fontes.</p>' + ''.join(sections) + '<footer>Bravo Viewer · desenvolvido por Reikjv</footer></html>'
+            report = f'<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Bravo Viewer · relatório</title><style>body{{font:14px system-ui;color:#183c49;background:#f7fbfb;margin:35px auto;padding:20px;max-width:1150px;line-height:1.55}}h1{{font-size:30px;margin:12px 0 4px}}h2{{margin-top:38px;font-size:19px}}h3{{margin:0 0 12px;font-size:15px}}th,td{{padding:10px 12px;border-bottom:1px solid #e2ecee;text-align:left;vertical-align:top;overflow-wrap:anywhere}}th{{background:#eaf3f4;font-size:11px;text-transform:uppercase;letter-spacing:.5px}}tr:last-child td{{border-bottom:0}}table{{border-collapse:separate;border-spacing:0;width:100%;font-size:12px}}.table{{overflow:auto;background:#fff;border:1px solid #d8e4e7;border-radius:14px}}article{{background:#fff;border:1px solid #d8e4e7;border-radius:16px;padding:20px;margin:18px 0;box-shadow:0 6px 20px -14px #183c4966}}svg{{width:100%;height:auto;max-height:320px;display:block;margin-bottom:10px}}svg text{{font:12px system-ui;fill:#56737d}}a{{color:#217987;font-weight:600}}footer{{margin-top:40px;border-top:1px solid #d8e4e7;padding-top:15px;color:#56737d}}</style><svg width="0" height="0" style="position:absolute"><defs><linearGradient id="bv-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#217987" stop-opacity=".25"/><stop offset="1" stop-color="#217987" stop-opacity="0"/></linearGradient></defs></svg><h1>Bravo Viewer</h1><p>{html.escape(config["equipment"])} · {manifest["generated_at_utc"]}</p><p>Exportação: {"todo o histórico" if all_scope else "visão atual · " + html.escape(tab)}. Dados completos em CSV/JSONL; gráficos são uma redução que mantém extremos e segmentos. Datas em UTC. Contadores e acumuladores não são somados entre fontes.</p>' + ''.join(sections) + '<footer>Bravo Viewer · desenvolvido por Reikjv</footer></html>'
             web = Path(__file__).resolve().parents[1] / "web"
             for filename in ("brs.png", "brand.png"):
                 archive.write(web / filename, root + "assets/" + filename)

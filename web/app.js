@@ -33,6 +33,18 @@ const escape = value => String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp
 const bytes = value => value >= 1073741824 ? fmt(value / 1073741824) + " GB" : value >= 1048576 ? fmt(value / 1048576) + " MB" : fmt(value / 1024) + " KB";
 const duration = value => typeof value === "number" ? `${Math.floor(value / 3600)} h ${Math.floor(value % 3600 / 60)} min` : "—";
 const date = ts => ts ? new Date(ts * 1000).toLocaleString("pt-BR") : "Sem data válida";
+const plural = (count, one, many) => `${fmt(count, 0)} ${count === 1 ? one : many}`;
+let busyCount = 0, noticeTimer = 0, revealChart = false, resizeFrame = 0;
+function busy(delta) {
+  busyCount = Math.max(0, busyCount + delta);
+  document.body.classList.toggle("busy", busyCount > 0);
+}
+function setValue(id, text) {
+  const element = $(id);
+  if (element.textContent === text) return;
+  element.textContent = text;
+  element.classList.remove("updated"); void element.offsetWidth; element.classList.add("updated");
+}
 function flatten(value, prefix = "", out = {}) {
   if (Array.isArray(value)) value.forEach((v, i) => flatten(v, `${prefix}[${i}]`, out));
   else if (value !== null && typeof value === "object") Object.entries(value).forEach(([k, v]) => flatten(v, prefix ? `${prefix}.${k}` : k, out));
@@ -40,17 +52,24 @@ function flatten(value, prefix = "", out = {}) {
   return out;
 }
 async function api(path, options) {
-  const response = await fetch(endpoint("api/" + path), options);
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || "A consulta não foi concluída");
-  return data;
+  const tracked = path !== "status";
+  if (tracked) busy(1);
+  try {
+    const response = await fetch(endpoint("api/" + path), options);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "A consulta não foi concluída.");
+    return data;
+  } finally { if (tracked) busy(-1); }
 }
 function post(path, data) {
   return api(path, {method: "POST", headers: {"Content-Type": "application/json", "X-Reikjv-History": "1"}, body: JSON.stringify(data)});
 }
 function notice(text, error = false) {
-  $("notice").textContent = text; $("notice").hidden = false;
-  $("notice").style.borderColor = error ? "#845559" : "#59604b";
+  const element = $("notice");
+  element.textContent = text; element.classList.toggle("error", error);
+  element.hidden = true; void element.offsetWidth; element.hidden = false;
+  clearTimeout(noticeTimer);
+  if (!error) noticeTimer = setTimeout(() => { element.hidden = true; }, 7000);
 }
 function task(fn) { return async (...args) => { try { await fn(...args); } catch (error) { if (error.name !== "AbortError") notice(error.message, true); } }; }
 function table(headers, rows, empty = "Nenhum registro disponível.") {
@@ -70,7 +89,8 @@ function go(tab) {
   document.querySelectorAll(".page").forEach(page => page.hidden = page.id !== tab);
   document.querySelectorAll("nav button").forEach(button => button.classList.toggle("active", button.dataset.tab === tab));
   $("page-title").textContent = titles[tab][0]; $("page-description").textContent = titles[tab][1];
-  location.hash = tab;
+  if (location.hash.slice(1) !== tab) history.pushState(null, "", "#" + tab);
+  document.documentElement.scrollTop = 0;
   if (tab === "charts") requestAnimationFrame(drawChart);
   if (initialized && (changed || !loadedTabs.has(tab))) task(loadActivePage)();
 }
@@ -93,18 +113,18 @@ function sessionRows(list) {
     fmt(file.summary.records || 0, 0),
     duration(file.summary.observed_seconds),
     duration(file.summary.armed_seconds),
-    file.summary.clock_issues?.length ? `<span class="severity warning">${file.summary.clock_issues.length} descontinuidades</span>` : '<span class="severity">Consultar qualidade</span>',
+    file.summary.clock_issues?.length ? `<span class="severity warning">${plural(file.summary.clock_issues.length, "descontinuidade", "descontinuidades")}</span>` : '<span class="severity ok">Sem saltos de relógio</span>',
     `<button class="secondary" data-session="${file.id}">Detalhes →</button>`,
   ]);
 }
 function renderOverview(data) {
   const stat = data.statistics;
-  $("runtime").textContent = duration(stat.STAT_RUNTIME);
-  $("armed-total").textContent = duration(stat.STAT_FLTTIME);
-  $("bootcount").textContent = fmt(stat.STAT_BOOTCNT, 0);
-  $("record-count").textContent = fmt(data.records, 0);
-  $("record-detail").textContent = `${data.files} fontes · ${bytes(data.bytes)} de originais`;
-  $("clock-quality").textContent = data.clock_issues ? `${data.clock_issues} descontinuidades` : "Sem saltos identificados";
+  setValue("runtime", duration(stat.STAT_RUNTIME));
+  setValue("armed-total", duration(stat.STAT_FLTTIME));
+  setValue("bootcount", fmt(stat.STAT_BOOTCNT, 0));
+  setValue("record-count", fmt(data.records, 0));
+  $("record-detail").textContent = `${plural(data.files, "fonte", "fontes")} · ${bytes(data.bytes)} de originais`;
+  $("clock-quality").textContent = data.clock_issues ? plural(data.clock_issues, "descontinuidade", "descontinuidades") : "Sem saltos identificados";
   $("database-size").textContent = `Base de dados: ${bytes(data.database_bytes)} · Originais: ${bytes(data.bytes)}. Crescimento depende da taxa e dos tipos registrados.`;
   const latest = files.find(file => file.summary.metrics && Object.keys(file.summary.metrics).some(key => key.includes("voltage_battery") || key === "BAT.Volt"));
   const metrics = latest?.summary.metrics || {};
@@ -112,22 +132,22 @@ function renderOverview(data) {
   const current = metrics["SYS_STATUS.current_battery"] || metrics["BAT.Curr"];
   const consumed = metrics["BATTERY_STATUS.current_consumed"] || metrics["BAT.CurrTot"];
   const energy = metrics["BATTERY_STATUS.energy_consumed"] || metrics["BAT.EnrgTot"];
-  $("voltage").textContent = voltage ? `${fmt(voltage.min, 3)} ${voltage.unit}` : "—";
-  $("current").textContent = current ? `${fmt(current.max)} ${current.unit}` : "—";
-  $("consumption").textContent = consumed ? `${fmt(consumed.last, 3)} ${consumed.unit}` : "—";
-  $("energy").textContent = energy ? `${fmt(energy.last, 3)} ${energy.unit}` : "—";
-  $("energy-source").textContent = latest ? `Fonte: ${latest.name}` : "Importe um log para consultar alimentação.";
+  setValue("voltage", voltage ? `${fmt(voltage.min, 3)} ${voltage.unit}` : "—");
+  setValue("current", current ? `${fmt(current.max)} ${current.unit}` : "—");
+  setValue("consumption", consumed ? `${fmt(consumed.last, 3)} ${consumed.unit}` : "—");
+  setValue("energy", energy ? `${fmt(energy.last, 3)} ${energy.unit}` : "—");
+  $("energy-source").textContent = latest ? `Fonte: ${latest.name}` : "Importe um log para consultar a alimentação.";
   $("recent-sessions").innerHTML = table(["Sessão / fonte", "Registros", "Tempo observado", "Tempo armado", "Continuidade", ""], sessionRows(files.slice(0, 5)));
   $("sessions-table").innerHTML = table(["Sessão / fonte", "Registros", "Tempo observado", "Tempo armado", "Continuidade", ""], sessionRows(files));
   $("empty-state").hidden = files.length > 0;
-  $("files-size").textContent = `${files.length} fontes · ${bytes(data.bytes)} de originais preservados`;
+  $("files-size").textContent = `${plural(files.length, "fonte", "fontes")} · ${bytes(data.bytes)} de originais preservados`;
 }
 function renderFiles() {
   const search = $("files-search").value.toLowerCase();
   const rows = files.filter(file => `${file.name} ${file.source_key}`.toLowerCase().includes(search)).map(file => [
     `<div class="file-name"><strong>${escape(file.name)}</strong><small>${escape(file.source_key.startsWith("blueos:") ? file.source_key.slice(file.source_key.indexOf(":", 7) + 1) : file.kind === "live" ? "Coleta amostrada" : "Importação local")}</small></div>`,
     escape(file.kind.toUpperCase()), bytes(file.size || 0), fmt(file.summary.records || 0, 0), fmt(file.stream_count, 0), date(file.imported_at),
-    file.kind === "live" ? '<span class="muted">Exportar tipos</span>' : `<a class="button secondary" href="${escape(endpoint(`api/original?file=${file.id}`))}">↓ Original</a>`,
+    file.kind === "live" ? '<span class="muted">Exportar pelo inventário</span>' : `<a class="button secondary" href="${escape(endpoint(`api/original?file=${file.id}`))}">↓ Original</a>`,
   ]);
   $("files-table").innerHTML = table(["Arquivo", "Formato", "Tamanho", "Registros", "Tipos / origens", "Importado", "Download"], rows);
 }
@@ -155,7 +175,7 @@ async function loadRecords() {
   const stream = $("explorer-stream").value;
   if (!stream) { $("records-table").innerHTML = table(["Registros"], []); $("field-list").replaceChildren(); return; }
   recordData = await api(`records?stream=${stream}&offset=${recordOffset}&limit=100`);
-  $("stream-info").textContent = `${recordData.stream.type} · origem ${recordData.stream.origin} · ${fmt(recordData.total, 0)} registros · ${recordData.stream.fields.length} campos`;
+  $("stream-info").textContent = `${recordData.stream.type} · origem ${recordData.stream.origin} · ${plural(recordData.total, "registro", "registros")} · ${plural(recordData.stream.fields.length, "campo", "campos")}`;
   $("export-csv").href = endpoint(`api/export?stream=${stream}&format=csv`);
   $("export-json").href = endpoint(`api/export?stream=${stream}&format=jsonl`);
   $("records-prev").disabled = recordOffset === 0;
@@ -171,7 +191,8 @@ function renderRecords() {
   $("field-list").replaceChildren();
   matched.forEach(field => {
     const button = document.createElement("button"); button.textContent = field;
-    button.title = "Mostrar somente esta coluna";
+    button.title = focusedField === field ? "Mostrar todas as colunas" : "Mostrar somente esta coluna";
+    button.classList.toggle("selected", focusedField === field);
     button.onclick = () => { focusedField = focusedField === field ? null : field; renderRecords(); };
     $("field-list").append(button);
   });
@@ -204,53 +225,88 @@ async function loadChart() {
   chartData = data;
   $("chart-title").textContent = `${chartIndicators[data.type]?.[field] || field} · ${data.type}`;
   $("chart-unit").textContent = data.unit || "SEM UNIDADE DEFINIDA";
-  $("chart-info").textContent = `${fmt(data.total, 0)} registros · ${fmt(data.points.length, 0)} pontos na visualização · ${fmt(data.invalid_samples, 0)} valores não numéricos ou desconhecidos. Passe o mouse para consultar um ponto.`;
+  $("chart-info").textContent = `${plural(data.total, "registro", "registros")} · ${plural(data.points.length, "ponto", "pontos")} na visualização · ${plural(data.invalid_samples, "valor não numérico ou desconhecido", "valores não numéricos ou desconhecidos")}. Passe o cursor sobre o gráfico para consultar cada ponto.`;
   const vals = data.points.filter(point => typeof point.value === "number").map(point => point.value);
   $("chart-stats").innerHTML = vals.length ? `<div><small>Mínimo</small><strong>${fmt(Math.min(...vals), 4)} ${escape(data.unit)}</strong></div><div><small>Máximo</small><strong>${fmt(Math.max(...vals), 4)} ${escape(data.unit)}</strong></div><div><small>Último ponto exibido</small><strong>${fmt(vals.at(-1), 4)} ${escape(data.unit)}</strong></div>` : "";
+  revealChart = true;
   drawChart();
 }
 function drawChart() {
   const canvas = $("plot"), rect = canvas.getBoundingClientRect();
   if (!rect.width) return;
-  const ratio = window.devicePixelRatio || 1;
-  canvas.width = rect.width * ratio; canvas.height = rect.height * ratio;
+  const ratio = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.round(rect.width * ratio); canvas.height = Math.round(rect.height * ratio);
   const ctx = canvas.getContext("2d"); ctx.scale(ratio, ratio);
   const w = rect.width, h = rect.height, points = chartData?.points || [];
   const valid = points.filter(point => typeof point.value === "number" && Number.isFinite(point.value));
   $("chart-empty").hidden = valid.length > 0;
+  $("chart-box").classList.remove("hover");
   plotted = [];
   if (!valid.length) return;
-  let lo = Math.min(...valid.map(point => point.value)), hi = Math.max(...valid.map(point => point.value));
+  let lo = Infinity, hi = -Infinity;
+  valid.forEach(point => { lo = Math.min(lo, point.value); hi = Math.max(hi, point.value); });
   const pad = Math.max((hi - lo) * .12, Math.abs(hi) * .002, .001); lo -= pad; hi += pad;
+  const left = 70, right = w - 22, top = 20, bottom = h - 46;
   const minSeq = points[0].seq, maxSeq = points.at(-1).seq;
-  const x = seq => 66 + (seq - minSeq) / (maxSeq - minSeq || 1) * (w - 87);
-  const y = value => 20 + (hi - value) / (hi - lo) * (h - 65);
-  ctx.font = '10px "Segoe UI",sans-serif';
+  const x = seq => left + (seq - minSeq) / (maxSeq - minSeq || 1) * (right - left);
+  const y = value => top + (hi - value) / (hi - lo) * (bottom - top);
+  ctx.font = '10.5px Inter,"Segoe UI",sans-serif';
+  ctx.setLineDash([3, 5]); ctx.lineWidth = 1;
   for (let index = 0; index <= 4; index++) {
-    const lineY = 20 + index * (h - 65) / 4;
-    ctx.strokeStyle = "#25404b"; ctx.beginPath(); ctx.moveTo(66, lineY); ctx.lineTo(w - 21, lineY); ctx.stroke();
-    ctx.fillStyle = "#8fa8b4"; ctx.textAlign = "right"; ctx.fillText(fmt(hi - index * (hi - lo) / 4, 3), 55, lineY + 4);
+    const lineY = Math.round(top + index * (bottom - top) / 4) + .5;
+    ctx.strokeStyle = "#1d3945"; ctx.beginPath(); ctx.moveTo(left, lineY); ctx.lineTo(right, lineY); ctx.stroke();
+    ctx.fillStyle = "#7f99a6"; ctx.textAlign = "right"; ctx.fillText(fmt(hi - index * (hi - lo) / 4, 3), left - 12, lineY + 4);
   }
-  ctx.fillStyle = "#8fa8b4"; ctx.textAlign = "left"; ctx.fillText(`#${fmt(minSeq, 0)} · ${date(points[0].timestamp)}`, 66, h - 15);
-  ctx.textAlign = "right"; ctx.fillText(`#${fmt(maxSeq, 0)}`, w - 21, h - 15);
-  ctx.strokeStyle = "#77bfca"; ctx.lineWidth = 1.6; ctx.beginPath();
-  let previous = null;
+  ctx.setLineDash([]);
+  ctx.fillStyle = "#7f99a6"; ctx.textAlign = "left"; ctx.fillText(`#${fmt(minSeq, 0)} · ${date(points[0].timestamp)}`, left, h - 17);
+  ctx.textAlign = "right"; ctx.fillText(`#${fmt(maxSeq, 0)} · ${date(points.at(-1).timestamp)}`, right, h - 17);
+  const step = chartData.field === "_armed";
+  const segments = [];
+  let current = null, previous = null;
   points.forEach(point => {
-    if (point.value === null) { previous = null; return; }
+    if (typeof point.value !== "number" || !Number.isFinite(point.value)) { previous = null; return; }
+    if (!previous || previous.segment !== point.segment) { current = []; segments.push(current); }
     const px = x(point.seq), py = y(point.value);
-    if (!previous || previous.segment !== point.segment) ctx.moveTo(px, py);
-    else {
-      if (chartData.field === "_armed") ctx.lineTo(px, y(previous.value));
-      ctx.lineTo(px, py);
-    }
+    if (step && current.length) current.push([px, current.at(-1)[1]]);
+    current.push([px, py]);
     plotted.push({...point, x: px, y: py}); previous = point;
   });
-  ctx.stroke();
-  canvas.onpointermove = event => {
-    const px = event.clientX - canvas.getBoundingClientRect().left;
-    const closest = plotted.reduce((a, b) => Math.abs(b.x - px) < Math.abs(a.x - px) ? b : a, plotted[0]);
-    if (closest) canvas.title = `${fmt(closest.value, 6)} ${chartData.unit} · ${date(closest.timestamp)} · registro ${closest.seq}`;
-  };
+  const fill = ctx.createLinearGradient(0, top, 0, bottom);
+  fill.addColorStop(0, "rgba(95,180,192,.28)"); fill.addColorStop(1, "rgba(95,180,192,0)");
+  const stroke = ctx.createLinearGradient(left, 0, right, 0);
+  stroke.addColorStop(0, "#4fa3b1"); stroke.addColorStop(1, "#a6e1e9");
+  ctx.fillStyle = fill;
+  segments.forEach(segment => {
+    ctx.beginPath(); ctx.moveTo(segment[0][0], bottom);
+    segment.forEach(([px, py]) => ctx.lineTo(px, py));
+    ctx.lineTo(segment.at(-1)[0], bottom); ctx.closePath(); ctx.fill();
+  });
+  ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.strokeStyle = stroke;
+  segments.forEach(segment => {
+    ctx.beginPath(); segment.forEach(([px, py], index) => index ? ctx.lineTo(px, py) : ctx.moveTo(px, py));
+    ctx.stroke();
+    if (segment.length === 1) { ctx.beginPath(); ctx.arc(segment[0][0], segment[0][1], 3.5, 0, Math.PI * 2); ctx.fillStyle = "#a6e1e9"; ctx.fill(); }
+  });
+  if (revealChart) {
+    revealChart = false;
+    canvas.classList.remove("reveal"); void canvas.offsetWidth; canvas.classList.add("reveal");
+  }
+}
+function chartHover(event) {
+  const box = $("chart-box");
+  if (!plotted.length) { box.classList.remove("hover"); return; }
+  const px = event.clientX - $("plot").getBoundingClientRect().left;
+  let low = 0, high = plotted.length - 1;
+  while (low < high) { const mid = (low + high) >> 1; if (plotted[mid].x < px) low = mid + 1; else high = mid; }
+  const point = low > 0 && Math.abs(plotted[low - 1].x - px) < Math.abs(plotted[low].x - px) ? plotted[low - 1] : plotted[low];
+  const tip = $("chart-tip");
+  $("chart-cross").style.transform = `translateX(${point.x}px)`;
+  $("chart-dot").style.transform = `translate(${point.x}px,${point.y}px)`;
+  tip.innerHTML = `<strong>${fmt(point.value, 6)} ${escape(chartData.unit)}</strong><span>${escape(date(point.timestamp))} · registro ${fmt(point.seq, 0)}</span>`;
+  const flip = point.x > box.clientWidth - tip.offsetWidth - 30;
+  const tipY = Math.max(8, Math.min(point.y - tip.offsetHeight - 14, box.clientHeight - tip.offsetHeight - 8));
+  tip.style.transform = `translate(${flip ? point.x - tip.offsetWidth - 14 : point.x + 14}px,${tipY}px)`;
+  box.classList.add("hover");
 }
 async function loadEvents(reset = true) {
   if (reset) eventOffset = 0;
@@ -292,9 +348,9 @@ async function loadStatus() {
     if (!completedJobs.has(job.id)) {
       completedJobs.add(job.id); changed = job.action !== "bundle" || changed;
       if (job.status === "error") notice(job.progress, true);
-      else if (job.action === "sync") notice(`Busca concluída: ${job.result.imported} arquivos importados, ${job.result.skipped} já conhecidos ou vazios. ${job.result.errors.length} pastas/arquivos indisponíveis.`);
+      else if (job.action === "sync") notice(`Busca concluída: ${plural(job.result.imported, "arquivo importado", "arquivos importados")}, ${fmt(job.result.skipped, 0)} já conhecidos ou vazios e ${fmt(job.result.errors.length, 0)} pastas/arquivos indisponíveis.`);
       else if (job.action === "bundle") notice("Exportação pronta. Use Baixar ZIP para salvar o relatório e os dados.");
-      else notice(job.result.duplicate ? "Arquivo já conhecido; histórico preservado sem duplicação." : `Importação concluída: ${fmt(job.result.records, 0)} registros.`);
+      else notice(job.result.duplicate ? "Arquivo já conhecido; o histórico foi preservado sem duplicação." : `Importação concluída: ${plural(job.result.records, "registro", "registros")}.`);
     }
   });
   if (changed && !refreshing) await refresh();
@@ -332,7 +388,7 @@ async function loadCapabilities() {
 }
 async function loadInventory() {
   const inventory = await api("inventory");
-  $("inventory-info").textContent = inventory.captured_at ? `${inventory.host} · Consulta em ${date(inventory.captured_at)} · ${inventory.files.length} arquivos encontrados · ${inventory.errors.length} caminhos indisponíveis` : "Use Buscar no BlueOS para consultar os arquivos, inclusive os vazios.";
+  $("inventory-info").textContent = inventory.captured_at ? `${inventory.host} · consulta em ${date(inventory.captured_at)} · ${plural(inventory.files.length, "arquivo encontrado", "arquivos encontrados")} · ${plural(inventory.errors.length, "caminho indisponível", "caminhos indisponíveis")}` : "Use Buscar no BlueOS para consultar os arquivos, inclusive os vazios.";
   $("remote-files-table").innerHTML = table(["Caminho", "Formato", "Tamanho", "Situação"], inventory.files.map(item => [
     escape(item.path), escape(item.extension), bytes(item.size || 0),
     item.size === 0 ? '<span class="severity warning">Vazio · sem registros</span>' : files.some(file => file.source_key === `blueos:${inventory.host}:${item.path}`) ? "Importado · cópia do momento" : "Ainda não importado",
@@ -345,6 +401,9 @@ document.addEventListener("click", event => {
   if (button) { $("session-select").value = button.dataset.session; renderSession(); go("sessions"); }
 });
 $("refresh").onclick = task(refresh);
+$("notice").onclick = () => { $("notice").hidden = true; };
+$("plot").onpointermove = chartHover;
+$("plot").onpointerleave = () => $("chart-box").classList.remove("hover");
 $("files-search").oninput = renderFiles;
 $("field-search").oninput = () => { focusedField = null; renderRecords(); };
 $("session-select").onchange = renderSession;
@@ -392,7 +451,7 @@ $("export-form").onsubmit = task(async event => {
   $("export-progress").textContent = "Preparando exportação…";
   await loadStatus();
 });
-window.addEventListener("resize", drawChart);
+window.addEventListener("resize", () => { cancelAnimationFrame(resizeFrame); resizeFrame = requestAnimationFrame(drawChart); });
 window.addEventListener("hashchange", () => go(location.hash.slice(1)));
 go(titles[location.hash.slice(1)] ? location.hash.slice(1) : "overview");
 task(async () => { await loadStatus(); await refresh(); })();
