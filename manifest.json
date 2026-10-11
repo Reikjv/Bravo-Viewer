@@ -8,6 +8,61 @@
     "extension_logo": "https://raw.githubusercontent.com/Reikjv/Bravo-Viewer/main/logo.png",
     "company_logo": "https://raw.githubusercontent.com/Reikjv/Bravo-Viewer/main/logo.png",
     "versions": {
+      "0.2.1-beta.1": {
+        "tag": "0.2.1-beta.1",
+        "type": "tool",
+        "images": [
+          {
+            "expanded_size": 265699329,
+            "digest": "sha256:b0bd17be612281c836cdec9b6c39b0bf5c6b52fe2358f7f23890d8875dfe7fdb",
+            "platform": {
+              "architecture": "arm64",
+              "variant": null,
+              "os": "linux"
+            }
+          },
+          {
+            "expanded_size": 240498289,
+            "digest": "sha256:47ef9d072796e07352664769689bef8e55715a55583bb3ecceb562c0e1f57cc2",
+            "platform": {
+              "architecture": "arm",
+              "variant": "v7",
+              "os": "linux"
+            }
+          }
+        ],
+        "authors": [
+          {
+            "name": "Reikjv",
+            "email": "141414061+Reikjv@users.noreply.github.com"
+          }
+        ],
+        "filter_tags": [
+          "logs",
+          "history",
+          "monitoring",
+          "export"
+        ],
+        "extra_links": {
+          "github": "https://github.com/Reikjv/Bravo-Viewer"
+        },
+        "website": "https://github.com/Reikjv/Bravo-Viewer",
+        "readme": "https://raw.githubusercontent.com/Reikjv/Bravo-Viewer/main/README.md",
+        "company": {
+          "name": "BRS",
+          "about": "Bravo Viewer · histórico e diagnóstico do ROV"
+        },
+        "permissions": {
+          "HostConfig": {
+            "NetworkMode": "host",
+            "Memory": 268435456,
+            "NanoCpus": 500000000,
+            "Binds": [
+              "/usr/blueos/extensions/reikjv-rov-history:/data"
+            ]
+          }
+        }
+      },
       "0.2.0-beta.1": {
         "tag": "0.2.0-beta.1",
         "type": "tool",
