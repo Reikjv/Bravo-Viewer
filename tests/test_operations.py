@@ -5,7 +5,8 @@ from pymavlink.dialects.v20 import ardupilotmega as mav
 
 from rov_history.exporter import build_bundle
 from rov_history.ingest import import_file
-from rov_history.service import Service
+from rov_history import store as store_module
+from rov_history.service import Service, active_files, parse_time
 from rov_history.store import Store
 from tests.test_history import HistoryFixture, heartbeat, tlog
 
@@ -69,7 +70,8 @@ class OperationTests(HistoryFixture):
 
     def test_limit_removes_oldest_closed_operations_and_their_data(self):
         service = Service(self.root / "db", start=False)
-        service.configure({"operation_limit": 3})
+        store_module.OPERATION_LIMIT = 3
+        self.addCleanup(setattr, store_module, "OPERATION_LIMIT", 20)
         originals = []
         for index in range(5):
             result = import_file(service.store, self.dive(f"op{index}.tlog", [1, 2 + index]), f"blueos:{index}")
@@ -115,3 +117,19 @@ class OperationTests(HistoryFixture):
         service.ingest_live(cache(2))
         live = [f for f in service.store.files() if f["kind"] == "live"]
         self.assertEqual({ids["closed"], ids["current"]}, {f["operation_id"] for f in live})
+
+    def test_files_still_being_written_are_not_reimported(self):
+        now = parse_time("2026-10-11T20:10:00Z")
+        items = [
+            {"name": "00029.tlog", "path": "logs/00029.tlog", "extension": ".tlog", "modified": "2026-10-11T19:00:00Z"},
+            {"name": "00030.tlog", "path": "logs/00030.tlog", "extension": ".tlog", "modified": "2026-10-11T20:06:41.073590438Z"},
+            {"name": "service.log", "path": "system/service.log", "extension": ".log", "modified": "2026-10-11T20:06:00Z"},
+            {"name": "old.log", "path": "system/old.log", "extension": ".log", "modified": "2026-10-11T19:00:00Z"},
+        ]
+        # O .tlog mais recente é a inicialização atual; o log de serviço mudou há menos de 10 minutos.
+        self.assertEqual({"logs/00030.tlog", "system/service.log"}, active_files(items, now))
+
+    def test_operation_limit_is_fixed_at_twenty(self):
+        service = Service(self.root / "db", start=False)
+        service.configure({"operation_limit": 3})
+        self.assertEqual(20, service.store.operation_limit())

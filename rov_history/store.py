@@ -12,6 +12,10 @@ import time
 from .model import Catalog, category, dumps, flatten
 
 
+# Operações encerradas guardadas no ROV; valor fixo para todas as instalações.
+OPERATION_LIMIT = 20
+
+
 def operation_summary(files):
     """Resumo da operação sem somar fontes que registram a mesma telemetria.
 
@@ -185,7 +189,7 @@ class Store:
         return {"closed": op["id"], "current": new}
 
     def operation_limit(self):
-        return self.config().get("operation_limit", 10)
+        return OPERATION_LIMIT
 
     def expired_operations(self):
         with self.db() as db:

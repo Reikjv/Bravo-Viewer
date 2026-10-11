@@ -396,7 +396,6 @@ async function loadStatus() {
     $("config-host").value = data.config.host;
     $("config-collect").checked = data.config.collect;
     $("config-poll").value = String(data.config.poll_seconds);
-    $("config-op-limit").value = String(data.config.operation_limit || 10);
   }
   const running = data.jobs.filter(job => ["queued", "running"].includes(job.status));
   const bundle = data.jobs.find(job => job.id === exportJob);
@@ -516,7 +515,7 @@ $("upload").onchange = task(async () => {
 });
 $("config-form").onsubmit = task(async event => {
   event.preventDefault();
-  await post("config", {equipment: $("config-equipment").value, host: $("config-host").value, collect: $("config-collect").checked, poll_seconds: Number($("config-poll").value), operation_limit: Number($("config-op-limit").value)});
+  await post("config", {equipment: $("config-equipment").value, host: $("config-host").value, collect: $("config-collect").checked, poll_seconds: Number($("config-poll").value)});
   configDirty = false;
   notice("Configuração salva. A coleta segue o estado escolhido."); await loadStatus();
 });

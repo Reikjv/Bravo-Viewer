@@ -1,5 +1,7 @@
 """Importação em fila e coleta amostrada independente do navegador."""
 from datetime import datetime, timezone
+import os
+import re
 import json
 from pathlib import Path
 import queue
@@ -13,12 +15,44 @@ from .model import clean, dumps, flatten
 from .store import Store
 
 
+SETTLE_SECONDS = 600
+
+
+def active_files(items, now=None):
+    """Arquivos ainda em gravação: o log de voo mais recente de cada pasta e logs alterados há pouco."""
+    now = time.time() if now is None else now
+    active = set()
+    newest = {}
+    for item in items:
+        extension = (item.get("extension") or "").lower()
+        modified = parse_time(item.get("modified"))
+        if extension in (".tlog", ".bin"):
+            folder = os.path.dirname(item["path"])
+            if folder not in newest or (modified or 0, item["name"]) > newest[folder][0]:
+                newest[folder] = ((modified or 0, item["name"]), item["path"])
+        elif modified is None or now - modified < SETTLE_SECONDS:
+            active.add(item["path"])
+    return active | {path for _, path in newest.values()}
+
+
+def parse_time(value):
+    # O BlueOS informa nanossegundos; datetime aceita até microssegundos.
+    text = re.sub(r"(\.\d{6})\d+", r"\1", str(value or "")).replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(text).timestamp()
+    except ValueError:
+        return None
+
+
 class Service:
     def __init__(self, directory, start=True):
         self.store = Store(directory)
         self.jobs = {}
         self.job_lock = threading.RLock()
         self.queue = queue.Queue()
+        # Buscas automáticas têm fila própria e não atrasam exportações nem encerramentos.
+        self.sync_queue = queue.Queue()
+        self.sync_lock = threading.Lock()
         self.stop = threading.Event()
         self.collection = {"connected": False, "last_success": None, "error": None, "samples": 0}
         self.live_seen = {}
@@ -27,8 +61,8 @@ class Service:
         self.busy_sync = False
         self.threads = []
         if start:
-            for target in (self.worker, self.collector):
-                thread = threading.Thread(target=target, daemon=True)
+            for target, args in ((self.worker, (self.queue,)), (self.worker, (self.sync_queue,)), (self.collector, ())):
+                thread = threading.Thread(target=target, args=args, daemon=True)
                 thread.start()
                 self.threads.append(thread)
 
@@ -46,8 +80,6 @@ class Service:
             allowed["equipment"] = updates["equipment"].strip()
         if "poll_seconds" in updates:
             allowed["poll_seconds"] = min(60, max(1, int(updates["poll_seconds"])))
-        if "operation_limit" in updates:
-            allowed["operation_limit"] = min(30, max(3, int(updates["operation_limit"])))
         old = self.store.config()
         result = self.store.configure(allowed)
         if old["host"] != result["host"]:
@@ -74,7 +106,7 @@ class Service:
             self.jobs[job_id] = {"id": job_id, "action": action, "status": "queued", "progress": "Na fila", "started": time.time()}
             if action == "sync":
                 self.jobs[job_id]["host"] = args.get("host")
-        self.queue.put((job_id, action, args))
+        (self.sync_queue if action == "sync" else self.queue).put((job_id, action, args))
         return self.jobs[job_id].copy()
 
     def status(self):
@@ -82,10 +114,11 @@ class Service:
             jobs = [job.copy() for job in list(self.jobs.values())[-20:]]
         return {"config": self.store.config(), "collection": self.collection.copy(), "jobs": jobs}
 
-    def worker(self):
+    def worker(self, jobs=None):
+        jobs = jobs or self.queue
         while not self.stop.is_set():
             try:
-                job_id, action, args = self.queue.get(timeout=.5)
+                job_id, action, args = jobs.get(timeout=.5)
             except queue.Empty:
                 continue
             self.jobs[job_id].update(status="running", progress="Iniciando", percent=0)
@@ -109,7 +142,7 @@ class Service:
             except Exception as error:
                 self.jobs[job_id].update(status="error", progress=str(error))
             finally:
-                self.queue.task_done()
+                jobs.task_done()
                 if action == "import" and args.get("temporary"):
                     Path(args["path"]).unlink(missing_ok=True)
 
@@ -143,6 +176,10 @@ class Service:
         return {**result, **ids, "removed": removed, "sync_error": sync_error}
 
     def sync(self, host, progress):
+        with self.sync_lock:
+            return self._sync(host, progress)
+
+    def _sync(self, host, progress):
         client = BlueOS(host)
         inventory = client.inventory()
         inventory.update(captured_at=time.time(), host=host)
@@ -150,6 +187,7 @@ class Service:
         index = json.loads(index_path.read_text()) if index_path.exists() else {}
         imported = []
         skipped = 0
+        active = active_files(inventory["files"])
         errors = inventory["errors"]
         inbox = self.store.directory / "inbox"
         inbox.mkdir(exist_ok=True)
@@ -157,6 +195,10 @@ class Service:
             key = f"blueos:{host}:{item['path']}"
             marker = [item["size"], item["modified"]]
             if not item["size"] or item.get("extension", "").lower() not in (".bin", ".tlog", ".log", ".gz") or index.get(key) == marker:
+                skipped += 1
+                continue
+            if item["path"] in active:
+                # Reimportar um arquivo em gravação repetiria todo o conteúdo a cada busca.
                 skipped += 1
                 continue
             progress(item["name"], 0)
