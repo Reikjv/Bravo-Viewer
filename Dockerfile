@@ -25,6 +25,6 @@ LABEL permissions='{"HostConfig":{"NetworkMode":"host","Memory":268435456,"NanoC
 LABEL authors='[{"name":"Reikjv","email":"141414061+Reikjv@users.noreply.github.com"}]'
 LABEL company='{"name":"BRS","about":"Bravo Viewer · histórico e diagnóstico do ROV"}'
 LABEL readme="https://raw.githubusercontent.com/Reikjv/Bravo-Viewer/main/README.md"
-LABEL links='{"github":"https://github.com/Reikjv/Bravo-Viewer","documentation":"https://github.com/Reikjv/Bravo-Viewer#instalacao"}'
+LABEL links='{"github":"https://github.com/Reikjv/Bravo-Viewer","documentation":"https://github.com/Reikjv/Bravo-Viewer/blob/main/README.md"}'
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health',timeout=3).read()"
 CMD ["python", "-m", "rov_history.app", "--data-dir", "/data", "--port", "8090", "--collect"]

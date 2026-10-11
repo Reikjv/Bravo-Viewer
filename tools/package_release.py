@@ -21,7 +21,8 @@ def main():
     if (args.arch != "source") != bool(args.image):
         parser.error("Pacotes ARM exigem --image; source não usa imagem")
     root = Path(__file__).resolve().parents[1]
-    files = [name for name in subprocess.check_output(["git", "ls-files", "-z"], cwd=root).decode().split("\0") if name]
+    # manifest.json na raiz é o catálogo BlueOS; o pacote gera metadados próprios nesse nome.
+    files = [name for name in subprocess.check_output(["git", "ls-files", "-z"], cwd=root).decode().split("\0") if name and name != "manifest.json"]
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root).decode().strip()
     if args.public:
         if args.arch == "source":
