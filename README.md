@@ -49,7 +49,22 @@ A grade **Dados e possibilidades** informa o que está disponível, os tipos ide
 
 Os testes locais incluíram 1.054.950 registros, oito clientes, exportação simultânea e coleta simulada por cinco minutos: banco e ZIP íntegros, sem falhas inesperadas e pico de memória de 64,5 MiB. Esse ensaio no computador não garante desempenho nem estabilidade prolongada no Navigator. A validação física deve conferir operação representativa, horas de coleta, reinício, rede e espaço disponível.
 
-Esta distribuição contém somente instaladores, catálogo e documentação de uso. Os logs de teste não estão incluídos. As dependências de terceiros conservam suas licenças na imagem.
+Este repositório contém o código da extensão, catálogo, testes e documentação de uso; as releases incluem os instaladores. Os logs de teste não estão incluídos. As dependências de terceiros conservam suas licenças na imagem.
+
+## Desenvolvimento
+
+Com Python 3.12 ou posterior:
+
+```powershell
+python -m pip install -r requirements.txt
+python -m rov_history.app --host 127.0.0.1 --port 8090 --data-dir data/app --blueos-host 192.168.2.2
+python -m unittest discover -v
+node --check web/app.js
+```
+
+O workflow testa a interface com dados sintéticos. Em tags de versão ou execução manual, constrói as imagens ARM sob QEMU, publica no GHCR e gera os instaladores e o manifesto com digests reais. No GHCR, o pacote precisa de visibilidade Public e acesso de escrita para as Actions deste repositório. A primeira publicação é privada por padrão do GitHub; a visibilidade do repositório não modifica automaticamente a do pacote.
+
+Veja [ESTABILIDADE.md](docs/ESTABILIDADE.md) e [GUIA_TESTES.md](docs/GUIA_TESTES.md) para evidências e validação no equipamento.
 
 ---
 

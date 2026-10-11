@@ -1,0 +1,31 @@
+name: Verify Bravo Viewer public distribution
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Package metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api users/Reikjv/packages/container/bravo-viewer --jq '{name,visibility,html_url}'
+      - name: Anonymous container access
+        run: |
+          python - <<'PY'
+          import json, urllib.request
+          from urllib.error import HTTPError
+          try:
+              with urllib.request.urlopen('https://ghcr.io/token?service=ghcr.io&scope=repository:reikjv/bravo-viewer:pull', timeout=15) as r:
+                  token = json.load(r)['token']
+              req = urllib.request.Request('https://ghcr.io/v2/reikjv/bravo-viewer/manifests/0.2.0-beta.1', headers={'Authorization':'Bearer '+token, 'Accept':'application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.index.v1+json'})
+              with urllib.request.urlopen(req, timeout=15) as r:
+                  data = json.load(r)
+              print('Anonymous access OK:', [m['platform'] for m in data['manifests']])
+          except HTTPError as error:
+              print('Anonymous access denied:', error.code)
+              raise SystemExit(1)
+          PY

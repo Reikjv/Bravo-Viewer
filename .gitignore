@@ -1,0 +1,9 @@
+data/
+__pycache__/
+.venv/
+*.pyc
+artifacts/
+.tooling/
+image.tar.gz
+architecture.txt
+SHA256SUMS

@@ -1,0 +1,115 @@
+name: Test, build and publish Bravo Viewer
+on:
+  workflow_dispatch:
+  push:
+    branches: ['main']
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '24'
+      - run: pip install -r requirements.txt
+      - run: python -m unittest discover -v
+      - run: node --check web/app.js
+      - run: bash -n install.sh
+      - name: DOM and API
+        run: |
+          npm install --prefix .tooling --no-save --package-lock=false jsdom@26.1.0
+          python tools/preview_fixture.py --port 18090 > preview.log 2>&1 &
+          preview_pid=$!
+          trap 'kill "$preview_pid"' EXIT
+          for attempt in {1..30}; do
+            if curl -fsS http://127.0.0.1:18090/health; then break; fi
+            sleep 1
+          done
+          node tools/test_frontend.cjs http://127.0.0.1:18090/
+  build:
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            platform: linux/arm64
+          - arch: armv7
+            platform: linux/arm/v7
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      - name: Build, smoke test, push and package
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          ARCH: ${{ matrix.arch }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(python -c 'from rov_history import __version__; print(__version__)')
+          IMAGE=bravo-viewer
+          REGISTRY=ghcr.io/reikjv/bravo-viewer
+          docker buildx build --platform "$PLATFORM" --load -t "$IMAGE:$VERSION" .
+          docker run -d --name smoke --platform "$PLATFORM" --memory 256m --cpus .5 "$IMAGE:$VERSION"
+          for attempt in {1..30}; do
+            if docker exec smoke python -c 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8090/health",timeout=2).read()'; then break; fi
+            sleep 1
+          done
+          docker exec smoke python -c 'import json,urllib.request; o=json.load(urllib.request.urlopen("http://127.0.0.1:8090/api/overview")); assert o["records"]==0; r=json.load(urllib.request.urlopen("http://127.0.0.1:8090/register_service")); assert r["name"]=="Bravo Viewer"'
+          docker rm -f smoke
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker tag "$IMAGE:$VERSION" "$REGISTRY:$VERSION-$ARCH"
+          docker push "$REGISTRY:$VERSION-$ARCH"
+          docker save "$IMAGE:$VERSION" | gzip > image.tar.gz
+          python tools/package_release.py --arch "$ARCH" --image image.tar.gz --public --output artifacts/public
+          python tools/create_catalog.py --capture --arch "$ARCH" --registry "$REGISTRY:$VERSION-$ARCH" --output "artifacts/metadata/$ARCH.json"
+          if [[ "$ARCH" == arm64 ]]; then python tools/package_release.py --arch source --output artifacts/source; fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: Bravo-Viewer-${{ matrix.arch }}
+          path: artifacts/*
+          compression-level: 0
+          retention-days: 14
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Multi-platform image, catalog and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION=$(python -c 'from rov_history import __version__; print(__version__)')
+          REGISTRY=ghcr.io/reikjv/bravo-viewer
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker buildx imagetools create -t "$REGISTRY:$VERSION" "$REGISTRY:$VERSION-arm64" "$REGISTRY:$VERSION-armv7"
+          python tools/create_catalog.py --metadata-dir artifacts/metadata --output artifacts/manifest.json
+          gh release create "$TAG" artifacts/source/* artifacts/public/* artifacts/manifest.json --title "Bravo Viewer $TAG" --generate-notes --prerelease

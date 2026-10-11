@@ -1,0 +1,8 @@
+.git
+data
+.tooling
+.venv
+artifacts
+__pycache__
+**/__pycache__
+*.pyc
