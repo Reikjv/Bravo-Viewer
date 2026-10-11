@@ -22,9 +22,9 @@ Repositório público e pacote GHCR são configurações separadas. A página ca
 
 [bravo-viewer no GitHub Packages](https://github.com/users/Reikjv/packages/container/package/bravo-viewer)
 
-Nessa página, abra **Package settings**, use **Change visibility**, selecione **Public** e conclua a confirmação. Para próximas publicações pelas Actions do Bravo-Viewer, confira também que esse repositório possui acesso de escrita ao pacote em **Manage Actions access**.
+O pacote foi liberado para acesso público. A configuração de visibilidade fica em **Package settings → Change visibility**. Para próximas publicações pelas Actions do Bravo-Viewer, o repositório também precisa de acesso de escrita ao pacote em **Manage Actions access**.
 
-A liberação será considerada verificada quando o teste anônimo obtiver o token, ler o índice da versão e acessar as imagens ARM. Na última consulta da API, em 10/10/2026, o pacote ainda estava private e o download anônimo retornou 401. Os instaladores offline públicos funcionam independentemente dessa visibilidade.
+Em 10/10/2026, o acesso anônimo foi validado sem credenciais: token, índice da versão `0.2.0-beta.1`, manifestos ARM64/ARMv7 e acesso às camadas retornaram HTTP 200. Os digests das duas imagens correspondem aos publicados no catálogo. Os instaladores offline públicos continuam disponíveis como alternativa.
 
 Referências: [visibilidade e permissões de pacotes](https://docs.github.com/en/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility) e [extensões BlueOS](https://blueos.cloud/docs/stable/development/extensions/).
 
@@ -32,4 +32,4 @@ Referências: [visibilidade e permissões de pacotes](https://docs.github.com/en
 
 Em 10/10/2026, o BlueOS em 192.168.2.2 voltou a responder. A API confirmou que a fonte **Reikjv Bravo-Viewer** já está cadastrada e habilitada com o endereço acima, e que a versão `0.2.0-beta.1` aparece no catálogo. A imagem ARMv7 foi reconhecida como compatível com esse equipamento; a ARM64 não é compatível com a instalação atual.
 
-A consulta às extensões instaladas ainda não encontrou o Bravo Viewer. O download automático permanece dependente da liberação pública do pacote GHCR. Após a instalação, siga o [guia de bancada](GUIA_TESTES.md) para validar a execução no Navigator. Resultados de carga locais estão em [ESTABILIDADE.md](ESTABILIDADE.md); não substituem um ensaio prolongado no ROV.
+A consulta às extensões instaladas ainda não encontrou o Bravo Viewer. A imagem está acessível sem autenticação para instalação pelo catálogo de Extensões. Após a instalação, siga o [guia de bancada](GUIA_TESTES.md) para validar a execução no Navigator. Resultados de carga locais estão em [ESTABILIDADE.md](ESTABILIDADE.md); não substituem um ensaio prolongado no ROV.
