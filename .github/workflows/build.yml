@@ -85,9 +85,39 @@ jobs:
           path: artifacts/*
           compression-level: 0
           retention-days: 14
+  desktop:
+    needs: test
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - name: Build, smoke test and package Windows app
+        shell: pwsh
+        run: |
+          pip install -r requirements.txt pyinstaller==6.16.0
+          python -m PyInstaller --noconfirm --clean desktop/BravoViewerDesktop.spec
+          $version = python -c "from rov_history import __version__; print(__version__)"
+          $app = Start-Process dist/BravoViewerDesktop/BravoViewerDesktop.exe -ArgumentList '--no-window','--port','18300','--data-dir',"$env:RUNNER_TEMP\bravo" -PassThru
+          $ok = $false
+          foreach ($attempt in 1..40) {
+            try { $status = Invoke-RestMethod http://127.0.0.1:18300/api/status; if ($status.mode -eq 'desktop' -and $status.version -eq $version) { $ok = $true; break } } catch { Start-Sleep 1 }
+          }
+          Stop-Process -Id $app.Id -Force
+          if (-not $ok) { throw 'Desktop app did not start' }
+          New-Item -ItemType Directory -Force artifacts/desktop | Out-Null
+          Compress-Archive -Path dist/BravoViewerDesktop -DestinationPath "artifacts/desktop/Bravo-Viewer-Desktop-v$version-windows.zip"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: Bravo-Viewer-Desktop
+          path: artifacts/*
+          compression-level: 0
+          retention-days: 14
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: [build, desktop]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -112,4 +142,4 @@ jobs:
           printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           docker buildx imagetools create -t "$REGISTRY:$VERSION" "$REGISTRY:$VERSION-arm64" "$REGISTRY:$VERSION-armv7"
           python tools/create_catalog.py --metadata-dir artifacts/metadata --output artifacts/manifest.json
-          gh release create "$TAG" artifacts/source/* artifacts/public/* artifacts/manifest.json --title "Bravo Viewer $TAG" --generate-notes --prerelease
+          gh release create "$TAG" artifacts/source/* artifacts/public/* artifacts/desktop/* artifacts/manifest.json --title "Bravo Viewer $TAG" --generate-notes --prerelease

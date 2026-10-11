@@ -45,8 +45,8 @@ def parse_time(value):
 
 
 class Service:
-    def __init__(self, directory, start=True):
-        self.store = Store(directory)
+    def __init__(self, directory, start=True, mirror=False):
+        self.store = Store(directory, mirror=mirror)
         self.jobs = {}
         self.job_lock = threading.RLock()
         self.queue = queue.Queue()
@@ -61,7 +61,9 @@ class Service:
         self.busy_sync = False
         self.threads = []
         if start:
-            for target, args in ((self.worker, (self.queue,)), (self.worker, (self.sync_queue,)), (self.collector, ())):
+            # A cópia no PC não coleta do BlueOS; só processa exportações.
+            targets = ((self.worker, (self.queue,)),) if mirror else ((self.worker, (self.queue,)), (self.worker, (self.sync_queue,)), (self.collector, ()))
+            for target, args in targets:
                 thread = threading.Thread(target=target, args=args, daemon=True)
                 thread.start()
                 self.threads.append(thread)

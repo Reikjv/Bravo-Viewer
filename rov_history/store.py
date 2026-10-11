@@ -8,6 +8,7 @@ from pathlib import Path
 import sqlite3
 import threading
 import time
+import uuid
 
 from .model import Catalog, category, dumps, flatten
 
@@ -55,8 +56,10 @@ def operation_summary(files):
 
 
 class Store:
-    def __init__(self, directory):
+    def __init__(self, directory, mirror=False):
+        """mirror=True: cópia no PC; operações e identidade vêm do ROV, não são criadas aqui."""
         self.directory = Path(directory)
+        self.mirror = mirror
         self.directory.mkdir(parents=True, exist_ok=True)
         self.path = self.directory / "history.sqlite3"
         self.write_lock = threading.RLock()
@@ -96,7 +99,10 @@ class Store:
             if "operation_id" not in {row["name"] for row in db.execute("PRAGMA table_info(files)")}:
                 db.execute("ALTER TABLE files ADD COLUMN operation_id INTEGER")
             db.execute("CREATE INDEX IF NOT EXISTS files_operation ON files(operation_id)")
-            if not db.execute("SELECT 1 FROM operations WHERE status='open'").fetchone():
+            if not mirror and not db.execute("SELECT 1 FROM settings WHERE key='device_id'").fetchone():
+                # Identidade fixa do equipamento: renomear o ROV não mistura históricos no PC ou na nuvem.
+                db.execute("INSERT INTO settings VALUES ('device_id',?)", (dumps(uuid.uuid4().hex),))
+            if not mirror and not db.execute("SELECT 1 FROM operations WHERE status='open'").fetchone():
                 # Primeira execução com operações: o histórico existente forma a Operação 1.
                 number = db.execute("SELECT coalesce(max(id),0)+1 FROM operations").fetchone()[0]
                 first = db.execute("SELECT min(imported_at) FROM files").fetchone()[0] if number == 1 else None
@@ -144,7 +150,8 @@ class Store:
         if db is None:
             with self.db() as db:
                 return self.current_operation(db)
-        return dict(db.execute("SELECT * FROM operations WHERE status='open' ORDER BY id DESC LIMIT 1").fetchone())
+        row = db.execute("SELECT * FROM operations WHERE status='open' ORDER BY id DESC LIMIT 1").fetchone()
+        return dict(row) if row else None
 
     def operations(self):
         files = self.files()
@@ -187,6 +194,29 @@ class Store:
             number = db.execute("SELECT coalesce(max(id),0)+1 FROM operations").fetchone()[0]
             new = db.execute("INSERT INTO operations(name,started_at) VALUES(?,?)", (f"Operação {number}", now)).lastrowid
         return {"closed": op["id"], "current": new}
+
+    def records_after(self, file_id, after=-1, limit=20000):
+        """Registros de uma sessão a partir de uma sequência, para sincronização incremental."""
+        limit = min(max(1, limit), 50000)
+        with self.db() as db:
+            rows = db.execute("SELECT r.seq,r.ts,r.segment,r.data,s.type,s.origin FROM records r JOIN streams s ON s.id=r.stream_id WHERE r.file_id=? AND r.seq>? ORDER BY r.seq LIMIT ?", (file_id, after, limit))
+            for row in rows:
+                yield (dumps({"seq": row["seq"], "ts": row["ts"], "segment": row["segment"], "type": row["type"], "origin": row["origin"], "data": json.loads(row["data"])}) + "\n").encode()
+
+    def sync_manifest(self):
+        config = self.config()
+        with self.db() as db:
+            operations = [dict(row) for row in db.execute("SELECT id,name,location,client,notes,started_at,ended_at,status,summary FROM operations ORDER BY id")]
+            files = [dict(row) for row in db.execute("SELECT f.id,f.operation_id,f.source_key,f.name,f.kind,f.sha256,f.size,f.imported_at,f.summary,f.note,(SELECT coalesce(max(seq),-1) FROM records r WHERE r.file_id=f.id) AS last_seq FROM files f ORDER BY f.id")]
+        for item in operations + files:
+            item["summary"] = json.loads(item["summary"])
+        return {"device_id": config.get("device_id"), "equipment": config["equipment"], "operations": operations, "files": files}
+
+    def mirror_operation(self, op):
+        """Copia a operação do ROV; o PC mantém operações já removidas no ROV."""
+        with self.write_lock, self.db() as db:
+            db.execute("INSERT INTO operations(id,name,location,client,notes,started_at,ended_at,status,summary) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,location=excluded.location,client=excluded.client,notes=excluded.notes,started_at=excluded.started_at,ended_at=excluded.ended_at,status=excluded.status,summary=excluded.summary",
+                       (op["id"], op["name"], op["location"], op["client"], op["notes"], op["started_at"], op["ended_at"], op["status"], dumps(op["summary"])))
 
     def operation_limit(self):
         return OPERATION_LIMIT

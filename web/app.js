@@ -21,6 +21,7 @@ let completedJobs = new Set(), refreshing = false, chartRequest = 0;
 let configDirty = false;
 let initialized = false;
 let exportJob = null, closeJob = null, operationsData = null, opDirty = false;
+let desktopDevice, desktopSync;
 const opExportJobs = new Set();
 let chartAbort = null;
 const loadedTabs = new Set(), loadingTabs = new Set();
@@ -140,7 +141,7 @@ function renderOperations() {
     }
   }
   const oldest = closed.at(-1);
-  $("op-retention").textContent = `${closed.length} de ${limit} operações encerradas guardadas no ROV` + (closed.length >= limit && oldest ? ` · ao encerrar a atual, “${oldest.name}” será removida` : "");
+  $("op-retention").textContent = document.body.classList.contains("desktop") ? `${plural(closed.length, "operação encerrada guardada", "operações encerradas guardadas")} neste PC, inclusive as já removidas do ROV` : `${closed.length} de ${limit} operações encerradas guardadas no ROV` + (closed.length >= limit && oldest ? ` · ao encerrar a atual, “${oldest.name}” será removida` : "");
   $("operations-table").innerHTML = table(["Operação", "Período", "Tempo armado", "Prof. máxima", "Prof. média", "Sessões", "ZIP"], closed.map(op => {
     const depth = op.summary.depth || {};
     const zip = op.bundle_ready
@@ -383,8 +384,27 @@ async function loadEvents(reset = true) {
   $("events-page").textContent = `${fmt(eventOffset + (data.rows.length ? 1 : 0), 0)}–${fmt(eventOffset + data.rows.length, 0)} de ${fmt(data.total, 0)}`;
   $("events-prev").disabled = eventOffset === 0; $("events-next").disabled = eventOffset + data.rows.length >= data.total;
 }
+function renderFleet(data) {
+  if (data.mode !== "desktop") return;
+  document.body.classList.add("desktop");
+  $("fleet").hidden = false;
+  document.querySelectorAll("#op-form input, #op-form textarea").forEach(input => { input.readOnly = true; });
+  const select = $("fleet-device");
+  if (select.options.length !== data.devices.length || [...select.options].some((option, index) => option.value !== data.devices[index].id || option.text !== data.devices[index].equipment)) {
+    select.replaceChildren(...data.devices.map(device => new Option(device.equipment, device.id)));
+  }
+  if (data.active_device) select.value = data.active_device;
+  const device = data.devices.find(item => item.id === data.active_device);
+  $("fleet-state").textContent = !device ? "Nenhum ROV conectado" : device.running ? "Sincronizando…" : device.online === false ? "ROV fora da rede" : device.last_sync ? "Sincronizado" : "Aguardando primeira sincronização";
+  $("fleet-detail").textContent = !device ? "Use Conectar ROV com o IP do BlueOS (normalmente 192.168.2.2)." : `${device.host} · ${device.message || ""}${device.last_sync ? ` · última em ${date(device.last_sync)}` : ""}`;
+  // Troca de equipamento ou sincronização concluída: recarrega a tela com os dados novos.
+  const changed = desktopDevice !== undefined && (desktopDevice !== data.active_device || desktopSync !== device?.last_sync);
+  desktopDevice = data.active_device; desktopSync = device?.last_sync;
+  return changed;
+}
 async function loadStatus() {
   const data = await api("status");
+  const fleetChanged = renderFleet(data);
   $("version").textContent = data.version;
   $("equipment-name").textContent = data.config.equipment;
   $("equipment-description").textContent = `BlueOS ${data.config.host} · Coleta a cada ${data.config.poll_seconds} s`;
@@ -433,7 +453,7 @@ async function loadStatus() {
       else notice(job.result.duplicate ? "Arquivo já conhecido; o histórico foi preservado sem duplicação." : `Importação concluída: ${plural(job.result.records, "registro", "registros")}.`);
     }
   });
-  if (changed && !refreshing) await refresh();
+  if ((changed || fleetChanged) && !refreshing) await refresh();
   return data;
 }
 async function refresh() {
@@ -529,6 +549,15 @@ $("op-form").onsubmit = task(async event => {
   notice("Dados da operação salvos."); await loadOperations();
 });
 $("close-op").onclick = $("overview-close-op").onclick = openCloseDialog;
+$("fleet-device").onchange = task(async () => { await post("desktop-select", {device: $("fleet-device").value}); await loadStatus(); });
+$("fleet-sync").onclick = task(async () => { await post("desktop-sync", {}); notice("Sincronização iniciada."); });
+$("fleet-add").onclick = task(async () => {
+  const host = prompt("IP ou nome do BlueOS do ROV:", "192.168.2.2");
+  if (!host) return;
+  notice("Conectando ao ROV…");
+  await post("desktop-connect", {host: host.trim()});
+  notice("ROV conectado. A primeira sincronização pode levar alguns minutos."); await loadStatus();
+});
 $("close-cancel").onclick = () => $("close-dialog").close();
 $("close-form").onsubmit = task(async event => {
   event.preventDefault();

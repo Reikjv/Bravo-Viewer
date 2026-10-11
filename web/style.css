@@ -228,3 +228,11 @@ dialog .checkbox{margin:14px 0}
 .job .progress{flex:1;max-width:320px;margin:0 0 0 auto}
 .badge-ok{color:var(--green)}.badge-warn{color:var(--amber)}
 @media(max-width:1150px){.op-form{grid-template-columns:1fr}}
+.desktop-only{display:none}
+body.desktop .desktop-only{display:block}
+body.desktop .rov-only{display:none!important}
+.fleet{display:flex;align-items:center;gap:14px;padding:14px 18px;margin-bottom:20px;flex-wrap:wrap;background:linear-gradient(120deg,#123441,#0e222c 60%)}
+.fleet label{font-size:10.5px;color:var(--muted);font-weight:550;min-width:220px}
+.fleet-status{flex:1;min-width:200px}
+.fleet-status strong{display:block;font-size:13px;color:var(--light)}
+.fleet-status small{color:var(--muted);font-size:11px}

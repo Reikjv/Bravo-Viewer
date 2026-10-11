@@ -8,6 +8,8 @@ import re
 from pathlib import Path
 import tempfile
 import threading
+import time
+import unicodedata
 from urllib.parse import parse_qs, urlparse
 
 from . import __version__
@@ -44,7 +46,23 @@ class LimitedHTTPServer(ThreadingHTTPServer):
             self.slots.release()
 
 
-def create_server(service, host="127.0.0.1", port=8090):
+def slug(text):
+    text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
+    return re.sub(r"[^A-Za-z0-9]+", "-", text).strip("-")[:60] or "Bravo"
+
+
+def bundle_name(store, identifier):
+    """Nome do ZIP com equipamento, operação e data: Bravo-10_Inspecao-Casco_2026-10-11.zip."""
+    equipment = slug(store.config()["equipment"])
+    zip_path = store.directory / "exports" / (identifier + ".zip")
+    day = time.strftime("%Y-%m-%d", time.localtime(zip_path.stat().st_mtime))
+    with store.db() as db:
+        op = db.execute("SELECT name FROM operations WHERE bundle_id=?", (identifier,)).fetchone()
+    return f"{equipment}_{slug(op['name']) if op else 'Historico'}_{day}.zip"
+
+
+def create_server(service, host="127.0.0.1", port=8090, extension=None):
+    """extension: rotas adicionais do Desktop (get/post/status); None no ROV."""
     class Handler(BaseHTTPRequestHandler):
         def setup(self):
             self.request.settimeout(30)
@@ -89,11 +107,16 @@ def create_server(service, host="127.0.0.1", port=8090):
             if path.endswith("/health"):
                 return self.response({"status": "ok", "version": __version__})
             if path == "/api/status":
-                return self.response({**service.status(), "version": __version__})
+                return self.response({**service.status(), "version": __version__, **(extension.status() if extension else {"mode": "rov"})})
             if path == "/api/overview":
                 return self.response(service.store.overview())
             if path == "/api/operations":
                 return self.response({"operations": service.store.operations(), "limit": service.store.operation_limit()})
+            if path == "/api/sync/manifest":
+                return self.response(service.store.sync_manifest())
+            if path == "/api/sync/records":
+                rows = service.store.records_after(integer("file"), int(query.get("after", ["-1"])[0]), integer("limit", 20000))
+                return self.download(rows, "registros.jsonl", "application/x-ndjson")
             if path == "/api/files":
                 return self.response(service.store.files())
             if path == "/api/streams":
@@ -135,7 +158,7 @@ def create_server(service, host="127.0.0.1", port=8090):
                         while chunk := source.read(65536):
                             yield chunk
                     service.store.mark_bundle_downloaded(identifier)
-                return self.download(chunks(), "bravo-viewer-" + identifier[:8] + ".zip", "application/zip")
+                return self.download(chunks(), bundle_name(service.store, identifier), "application/zip")
             if path == "/api/original":
                 file = service.store.file(integer("file"))
                 filepath = Path(file["path"]).resolve()
@@ -147,6 +170,8 @@ def create_server(service, host="127.0.0.1", port=8090):
                         while chunk := source.read(65536):
                             yield chunk
                 return self.download(chunks(), f"bravo-viewer-original-{file['id']}{filepath.suffix}", "application/octet-stream")
+            if extension and path.startswith("/api/desktop/"):
+                return self.response(extension.get(path[len("/api/desktop/"):], query))
             if path.startswith("/api/"):
                 return self.response({"error": "Rota não encontrada"}, 404)
             name = path.rsplit("/", 1)[-1]
@@ -228,6 +253,8 @@ def create_server(service, host="127.0.0.1", port=8090):
                 if action == "note":
                     service.store.note(int(body["file"]), str(body["note"]))
                     return self.response({"ok": True})
+                if extension and action.startswith("desktop-"):
+                    return self.response(extension.post(action[len("desktop-"):], body))
                 return self.response({"error": "Ação não encontrada"}, 404)
             except (ValueError, KeyError, TypeError, OSError) as error:
                 self.response({"error": str(error)}, 400)

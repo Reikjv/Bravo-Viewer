@@ -186,7 +186,49 @@ class Summary:
             self.value["active_armed_period"] = None
 
 
-def import_file(store, source, source_key=None, progress=None, display_name=None):
+def append_records(store, meta, lines):
+    """Acrescenta registros já decodificados no ROV (coleta ao vivo) a uma cópia no PC.
+
+    O resumo é o calculado pelo ROV; recalcular por partes contaria lacunas falsas.
+    """
+    with store.write_lock, store.db() as db:
+        row = db.execute("SELECT id FROM files WHERE source_key=?", (meta["source_key"],)).fetchone()
+        if row:
+            file_id = row["id"]
+        else:
+            file_id = db.execute("INSERT INTO files(source_key,name,kind,path,size,imported_at,operation_id) VALUES(?,?,?,'',0,?,?)",
+                                 (meta["source_key"], meta["name"], meta["kind"], meta["imported_at"], meta["operation_id"])).lastrowid
+        streams = {(r["type"], r["origin"]): {"id": r["id"], "fields": set(json.loads(r["fields"])), "count": r["count"], "last": r["last_ts"]}
+                   for r in db.execute("SELECT * FROM streams WHERE file_id=?", (file_id,))}
+        added = 0
+        batch = []
+        for line in lines:
+            item = json.loads(line)
+            key = (item["type"], item["origin"])
+            if key not in streams:
+                stream_id = db.execute("INSERT INTO streams(file_id,type,origin,count,fields,first_ts,last_ts) VALUES(?,?,?,0,'[]',?,?)", (file_id, *key, item["ts"], item["ts"])).lastrowid
+                streams[key] = {"id": stream_id, "fields": set(), "count": 0, "last": item["ts"]}
+            info = streams[key]
+            info["count"] += 1
+            info["fields"].update(flatten(item["data"]))
+            info["last"] = item["ts"]
+            batch.append((file_id, info["id"], item["seq"], item["ts"], item["segment"], dumps(item["data"])))
+            if item["type"] == "STATUSTEXT":
+                db.execute("INSERT INTO events(file_id,ts,seq,severity,type,text) VALUES(?,?,?,?,?,?)", (file_id, item["ts"], item["seq"], str(item["data"].get("severity", "INFO")), "STATUSTEXT", str(item["data"].get("text", ""))))
+            if len(batch) >= 3000:
+                db.executemany("INSERT INTO records(file_id,stream_id,seq,ts,segment,data) VALUES(?,?,?,?,?,?)", batch)
+                added += len(batch); batch.clear()
+        if batch:
+            db.executemany("INSERT INTO records(file_id,stream_id,seq,ts,segment,data) VALUES(?,?,?,?,?,?)", batch)
+            added += len(batch)
+        for info in streams.values():
+            db.execute("UPDATE streams SET count=?,fields=?,last_ts=? WHERE id=?", (info["count"], dumps(sorted(info["fields"])), info["last"], info["id"]))
+        db.execute("UPDATE files SET summary=?,imported_at=?,operation_id=?,name=?,note=? WHERE id=?",
+                   (dumps(meta["summary"]), meta["imported_at"], meta["operation_id"], meta["name"], meta.get("note", ""), file_id))
+    return added
+
+
+def import_file(store, source, source_key=None, progress=None, display_name=None, operation_id=None):
     source = Path(source)
     if not source.is_file():
         raise ValueError("Arquivo não encontrado")
@@ -207,7 +249,7 @@ def import_file(store, source, source_key=None, progress=None, display_name=None
         old = db.execute("SELECT * FROM files WHERE source_key=?", (source_key,)).fetchone()
         if old and old["sha256"] == sha:
             return {"id": old["id"], "duplicate": True}
-        if old and old["operation_id"] is not None:
+        if old and old["operation_id"] is not None and operation_id is None:
             closed = db.execute("SELECT status FROM operations WHERE id=?", (old["operation_id"],)).fetchone()
             if closed and closed["status"] == "closed":
                 # Operações encerradas são congeladas; a versão exportada continua válida.
@@ -259,11 +301,14 @@ def import_file(store, source, source_key=None, progress=None, display_name=None
                     progress(source.name, seq + 1)
         if batch:
             db.executemany("INSERT INTO records(file_id,stream_id,seq,ts,segment,data) VALUES(?,?,?,?,?,?)", batch)
-        if not old or old["operation_id"] is None:
+        if operation_id is not None:
+            # Cópia no PC: a operação é a definida pelo ROV.
+            db.execute("UPDATE files SET operation_id=? WHERE id=?", (operation_id, file_id))
+        elif not old or old["operation_id"] is None:
             # Arquivo novo entra na operação aberta, salvo quando todos os dados são anteriores a ela.
             current = store.current_operation(db)
             last = max((info["last"] for info in streams.values() if info["last"] is not None), default=None)
-            operation = current["id"] if last is None or last >= current["started_at"] - 300 else None
+            operation = current["id"] if current and (last is None or last >= current["started_at"] - 300) else None
             db.execute("UPDATE files SET operation_id=? WHERE id=?", (operation, file_id))
         summary.finish_period("Fim do arquivo ou sessão ainda aberta")
         summary.value["field_units"] = {str(info["id"]): info["units"] for info in streams.values() if info["units"]}

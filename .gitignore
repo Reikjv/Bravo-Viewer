@@ -7,3 +7,5 @@ artifacts/
 image.tar.gz
 architecture.txt
 SHA256SUMS
+build/
+dist/
