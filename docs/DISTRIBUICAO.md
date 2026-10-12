@@ -2,6 +2,10 @@
 
 Repositório principal: [Reikjv/Bravo-Viewer](https://github.com/Reikjv/Bravo-Viewer). Código, testes, catálogo e documentação de uso estão nesse repositório. A pasta local usa esse endereço como `origin`; o histórico inicial ficou no remoto `legacy` e na branch `legacy-main`. Os documentos anteriores da inspeção também foram preservados em `data/legacy_documents/`, fora da branch publicada. Capturas e bancos locais permanecem em `data/`, fora do Git.
 
+## Beta 0.6.0-beta.1
+
+O ROV lê os logs onde o BlueOS grava (montagens somente leitura de `/root/.config/blueos/ardupilot-manager/logs` e `/var/logs/blueos/services`), sem cópias; as cópias anteriores são trocadas pelo original e removidas. O Desktop baixa os .tlog e processa no PC, procura ROVs na rede, tem a tela Frota e envia ao Supabase em fila (login no PC, upload retomável). Ensaio com o Navigator real: 177 sessões e 3,7 milhões de mensagens sincronizadas e processadas no PC em 58 s; sincronização seguinte em 0,2 s. O envio ao Supabase foi testado contra um servidor simulado; o esquema ainda não foi aplicado ao projeto remoto. [Release](https://github.com/Reikjv/Bravo-Viewer/releases/tag/v0.6.0-beta.1).
+
 ## Beta 0.5.0-beta.1
 
 Armazenamento compacto: cada log é lido uma vez e o banco guarda resumo, ocorrências, inventário e séries de 10 s; os .tlog originais são relidos sob demanda. Em ensaio local com os logs de bancada (1.054.950 mensagens): banco de 234 MB para 0,46 MB, importação em 9,9 s, conversão do histórico anterior em 17 s, sincronização de resumos do Desktop em 0,2 s, e carga de 60 s com 8 clientes sem erros, pico de 81 MB de memória e exportação completa reconstruída dos originais. [Release](https://github.com/Reikjv/Bravo-Viewer/releases/tag/v0.5.0-beta.1).
