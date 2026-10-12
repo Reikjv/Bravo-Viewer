@@ -8,6 +8,63 @@
     "extension_logo": "https://raw.githubusercontent.com/Reikjv/Bravo-Viewer/main/catalog/card.png",
     "company_logo": "https://raw.githubusercontent.com/Reikjv/Bravo-Viewer/main/catalog/reikjv.png",
     "versions": {
+      "0.8.0-beta.1": {
+        "tag": "0.8.0-beta.1",
+        "type": "tool",
+        "images": [
+          {
+            "expanded_size": 265845344,
+            "digest": "sha256:d8737948699d2bc8daed59f6e3ad3986fb1185e89e3e0a7ca72857be43f73129",
+            "platform": {
+              "architecture": "arm64",
+              "variant": null,
+              "os": "linux"
+            }
+          },
+          {
+            "expanded_size": 240644323,
+            "digest": "sha256:1e2316f3960ead0f33fe0a95597ba4d02be26ace4fcb641a2f28e0a3ff83f6ff",
+            "platform": {
+              "architecture": "arm",
+              "variant": "v7",
+              "os": "linux"
+            }
+          }
+        ],
+        "authors": [
+          {
+            "name": "Reikjv",
+            "email": "141414061+Reikjv@users.noreply.github.com"
+          }
+        ],
+        "filter_tags": [
+          "logs",
+          "history",
+          "monitoring",
+          "export"
+        ],
+        "extra_links": {
+          "github": "https://github.com/Reikjv/Bravo-Viewer"
+        },
+        "website": "https://github.com/Reikjv/Bravo-Viewer",
+        "readme": "https://raw.githubusercontent.com/Reikjv/Bravo-Viewer/main/README.md",
+        "company": {
+          "name": "Bravo Viewer",
+          "about": "Histórico e diagnóstico do ROV · Reikjv"
+        },
+        "permissions": {
+          "HostConfig": {
+            "NetworkMode": "host",
+            "Memory": 268435456,
+            "NanoCpus": 500000000,
+            "Binds": [
+              "/usr/blueos/extensions/reikjv-rov-history:/data",
+              "/root/.config/blueos/ardupilot-manager/logs:/blueos/ardupilot_logs/logs:ro",
+              "/var/logs/blueos/services:/blueos/system_logs:ro"
+            ]
+          }
+        }
+      },
       "0.7.0-beta.1": {
         "tag": "0.7.0-beta.1",
         "type": "tool",
