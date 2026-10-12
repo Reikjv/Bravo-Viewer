@@ -399,8 +399,9 @@ function renderCloud(state) {
   $("cloud-status").textContent = state.logged_in ? `${state.email} · ${state.message}${state.pending ? ` · ${plural(state.pending, "sessão pendente", "sessões pendentes")}` : ""}` : "Entre com a conta do Supabase para enviar os dados da frota.";
   $("fleet-cloud").textContent = state.logged_in ? ` · Nuvem: ${state.message}` : " · Nuvem desconectada";
   if (document.activeElement.closest?.("#cloud-form") == null && !cloudDirty) {
+    // Projeto e chave publishable da empresa (públicos por natureza); cada pessoa entra com a própria conta.
     $("cloud-url").value = state.url || "https://vkilosmlgnvtlseuivoj.supabase.co";
-    $("cloud-key").value = state.key || "";
+    $("cloud-key").value = state.key || "sb_publishable_CnpMXAMRYfZkIuJLQ2cjsg_z4DEl450";
     $("cloud-email").value = state.email || "";
     $("cloud-enabled").checked = state.logged_in ? state.enabled : true;
   }
