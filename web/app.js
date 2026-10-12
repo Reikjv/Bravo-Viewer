@@ -407,13 +407,14 @@ async function loadEvents(reset = true) {
 }
 function fleetCard(device) {
   const op = device.current, s = op?.summary || {}, depth = s.depth || {};
-  const state = device.running ? ["Sincronizando", ""] : device.online === false ? ["Fora da rede", "offline"] : device.last_sync ? ["Na rede", "connected"] : ["Aguardando", ""];
+  const state = !device.host ? ["Pela nuvem", ""] : device.running ? ["Sincronizando", ""] : device.online === false ? ["Fora da rede", "offline"] : device.last_sync ? ["Na rede", "connected"] : ["Aguardando", ""];
   const extra = device.addresses?.length > 1 ? ` · também em ${device.addresses.filter(a => a !== device.host).join(", ")}` : "";
+  const where = device.host ? device.host + extra : "Dados enviados por outro PC";
   return `<article class="rov-card ${device.id === fleetData.active ? "active" : ""}">
-    <header><span class="equipment-icon"><svg class="icon"><use href="#i-rov"/></svg></span><div><h2>${escape(device.equipment || "ROV")}</h2><small>${escape(device.host)}${escape(extra)}</small></div><span class="status ${state[1]}">${state[0]}</span></header>
+    <header><span class="equipment-icon"><svg class="icon"><use href="#i-rov"/></svg></span><div><h2>${escape(device.equipment || "ROV")}</h2><small>${escape(where)}</small></div><span class="status ${state[1]}">${state[0]}</span></header>
     <div class="rov-op"><small>OPERAÇÃO ATUAL</small><strong>${escape(op?.name || "—")}</strong><small>${escape([op?.location, op?.client].filter(Boolean).join(" · ") || "Sem local informado")}${op ? ` · desde ${escape(date(op.started_at))}` : ""}</small></div>
     <div class="rov-stats"><div><small>Tempo armado</small><strong>${duration(s.armed_seconds || 0)}</strong></div><div><small>Prof. máxima</small><strong>${depth.available ? meters(depth.max) : "Sem sensor"}</strong></div><div><small>Sessões</small><strong>${fmt(device.sessions || 0, 0)}</strong></div></div>
-    <footer><span class="muted">${escape(device.message || (device.last_sync ? `Sincronizado em ${date(device.last_sync)}` : "Ainda não sincronizado"))}${device.pending_logs ? ` · ${plural(device.pending_logs, "log pendente", "logs pendentes")}` : ""}${device.closed ? ` · ${plural(device.closed, "operação encerrada", "operações encerradas")}` : ""}</span><button class="secondary" data-fleet-sync="${device.id}">Sincronizar</button><button data-fleet-open="${device.id}">Abrir</button></footer>
+    <footer><span class="muted">${escape(device.message || (device.last_sync ? `Sincronizado em ${date(device.last_sync)}` : "Ainda não sincronizado"))}${device.pending_logs ? ` · ${plural(device.pending_logs, "log pendente", "logs pendentes")}` : ""}${device.closed ? ` · ${plural(device.closed, "operação encerrada", "operações encerradas")}` : ""}</span>${device.host ? `<button class="secondary" data-fleet-sync="${device.id}">Sincronizar</button>` : ""}<button data-fleet-open="${device.id}">Abrir</button></footer>
   </article>`;
 }
 function renderUpdate(update) {

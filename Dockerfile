@@ -15,7 +15,7 @@ COPY rov_history ./rov_history
 COPY web ./web
 COPY docs/catalogos ./docs/catalogos
 EXPOSE 8090
-LABEL version="0.7.0-beta.1"
+LABEL version="0.8.0-beta.1"
 LABEL org.opencontainers.image.title="Bravo Viewer"
 LABEL org.opencontainers.image.source="https://github.com/Reikjv/Bravo-Viewer"
 LABEL org.reikjv.history.managed="true"

@@ -5,6 +5,7 @@ ou chave administrativa fica no programa; o refresh token é protegido pelo
 Windows (DPAPI). Uma fila só é concluída depois de metadados e original enviados.
 """
 import base64
+import hashlib
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -68,6 +69,10 @@ def unprotect(value):
 
 def iso(ts):
     return datetime.fromtimestamp(ts, timezone.utc).isoformat() if ts else None
+
+
+def epoch(text):
+    return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp() if text else None
 
 
 class Supabase:
@@ -228,8 +233,13 @@ class CloudSync:
                 client = self.client()
                 sent = 0
                 for device_id, device in list(self.fleet.devices.items()):
+                    if device.get("cloud") and not device.get("host"):
+                        continue  # ROV visto só pela nuvem: nada local para enviar.
                     sent += self.sync_device(client, device_id, device)
-                self.state.update(message=f"Nuvem em dia · {sent} {'sessão enviada' if sent == 1 else 'sessões enviadas'}" if sent else "Nuvem em dia", pending=0)
+                self.state["message"] = "Recebendo dados de outros PCs"
+                received = self.pull(client)
+                parts = [f"{sent} {'sessão enviada' if sent == 1 else 'sessões enviadas'}" if sent else "", f"{received} {'recebida' if received == 1 else 'recebidas'}" if received else ""]
+                self.state.update(message="Nuvem em dia" + (" · " + ", ".join(p for p in parts if p) if any(parts) else ""), pending=0, last=time.time())
             except CloudError as error:
                 auth = error.status in (401, 403)
                 self.state.update(connected=not auth, error=str(error),
@@ -244,12 +254,25 @@ class CloudSync:
 
     def sync_device(self, client, device_id, device):
         store = self.fleet.service(device_id).store
-        client.register_device(device_id, device.get("equipment") or "ROV")
+        equipment = device.get("equipment") or "ROV"
+        registered = self.config.setdefault("registered", {})
+        if registered.get(device_id) != equipment:
+            client.register_device(device_id, equipment)
+            registered[device_id] = equipment
         operations = store.operations()
-        client.upsert("bravo_operations", [{
-            "device_id": device_id, "op_id": op["id"], "name": op["name"], "location": op["location"], "client": op["client"],
-            "notes": op["notes"], "started_at": iso(op["started_at"]), "ended_at": iso(op["ended_at"]), "status": op["status"],
-            "summary": op["summary"]} for op in operations], "device_id,op_id")
+        # Só sobe operação que mudou desde o último envio: dados recebidos da nuvem não voltam para ela.
+        sent_ops = self.config.setdefault("sent_ops", {}).setdefault(device_id, {})
+        rows = []
+        for op in operations:
+            row = {"device_id": device_id, "op_id": op["id"], "name": op["name"], "location": op["location"], "client": op["client"],
+                   "notes": op["notes"], "started_at": iso(op["started_at"]), "ended_at": iso(op["ended_at"]), "status": op["status"],
+                   "summary": op["summary"]}
+            fingerprint = hashlib.sha256(dumps(row).encode()).hexdigest()
+            if sent_ops.get(str(op["id"])) != fingerprint:
+                rows.append((row, fingerprint))
+        client.upsert("bravo_operations", [row for row, _ in rows], "device_id,op_id")
+        for row, fingerprint in rows:
+            sent_ops[str(row["op_id"])] = fingerprint
         remote = client.sessions(device_id)
         with store.db() as db:
             files = [dict(row) for row in db.execute("SELECT id,source_key,name,kind,sha256,size,summary,note,operation_id,path,remote_revision,imported_at FROM files")]
@@ -291,7 +314,61 @@ class CloudSync:
         self.save()
         return len(pending)
 
-    def loop(self, stop, seconds=300):
+    def pull(self, client):
+        """Recebe da nuvem o que outros PCs enviaram: ROVs, operações, resumos, gráficos e ocorrências.
+
+        Só busca o que mudou desde a última leitura. Os logs originais ficam na nuvem.
+        """
+        pulled = self.config.setdefault("pulled", {})
+        _, _, devices = client.call("GET", "/rest/v1/bravo_devices?select=id,equipment")
+        received = 0
+        for device in devices:
+            device_id, equipment = device["id"], device["equipment"]
+            with self.fleet.lock:
+                known = self.fleet.devices.setdefault(device_id, {})
+                if not known.get("host"):
+                    known.update(equipment=equipment, cloud=True)
+                if self.fleet.active is None:
+                    self.fleet.active = device_id
+                self.fleet.save()
+            store = self.fleet.service(device_id).store
+            if not known.get("host"):
+                store.configure({"equipment": equipment, "device_id": device_id})
+            since = pulled.get(device_id, {})
+            # Operações antes das sessões: a sessão aponta para a operação.
+            ops_since = f"&updated_at=gt.{quote(since['operations'])}" if since.get("operations") else ""
+            _, _, operations = client.call("GET", f"/rest/v1/bravo_operations?device_id=eq.{device_id}{ops_since}&order=updated_at&select=op_id,name,location,client,notes,started_at,ended_at,status,summary,updated_at")
+            for op in operations:
+                store.mirror_operation({"id": op["op_id"], "name": op["name"], "location": op["location"], "client": op["client"], "notes": op["notes"],
+                                        "started_at": epoch(op["started_at"]), "ended_at": epoch(op["ended_at"]), "status": op["status"], "summary": op["summary"]})
+            if operations:
+                since["operations"] = operations[-1]["updated_at"]
+            with store.db() as db:
+                local = {row["source_key"]: dict(row) for row in db.execute("SELECT source_key,sha256,path,remote_revision FROM files")}
+            while True:
+                sessions_since = f"&updated_at=gt.{quote(since['sessions'])}" if since.get("sessions") else ""
+                _, _, sessions = client.call("GET", f"/rest/v1/bravo_sessions?device_id=eq.{device_id}{sessions_since}&order=updated_at&limit=200"
+                                                    "&select=source_key,operation_id,name,kind,sha256,size,source_revision,summary,analysis,note,storage_path,updated_at")
+                for row in sessions:
+                    mine = local.get(row["source_key"])
+                    # Já temos igual ou mais novo (ex.: processado aqui a partir do log): nada a fazer.
+                    if mine and mine["sha256"] == row["sha256"] and (mine["remote_revision"] or 0) >= row["source_revision"]:
+                        continue
+                    if mine and mine["path"] and mine["sha256"] == row["sha256"]:
+                        continue
+                    store.apply_meta({"source_key": row["source_key"], "name": row["name"], "kind": row["kind"], "sha256": row["sha256"],
+                                      "size": row["size"], "imported_at": row["source_revision"], "summary": row["summary"],
+                                      "note": row["note"], "operation_id": row["operation_id"]}, row["analysis"] or {"streams": [], "events": [], "series": []})
+                    received += 1
+                if sessions:
+                    since["sessions"] = sessions[-1]["updated_at"]
+                if len(sessions) < 200:
+                    break
+            pulled[device_id] = since
+        self.save()
+        return received
+
+    def loop(self, stop, seconds=60):
         while not stop.is_set():
             self.run_once()
             self.wake.wait(seconds)

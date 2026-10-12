@@ -18,6 +18,8 @@ class FakeSupabase:
         self.devices, self.operations, self.sessions, self.objects, self.uploads = {}, {}, {}, {}, {}
         self.fail_patch_once = False
         self.refreshes = 0
+        self.clock = 0
+        self.writes = []
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -60,6 +62,9 @@ class FakeSupabase:
                 if url.path.startswith("/rest/v1/"):
                     table = url.path.rsplit("/", 1)[1]
                     for row in json.loads(raw):
+                        fake.clock += 1
+                        row = {**row, "updated_at": f"2026-10-13T00:00:{fake.clock:02d}+00:00"}
+                        fake.writes.append(table)
                         if table == "bravo_operations":
                             fake.operations[(row["device_id"], row["op_id"])] = row
                         else:
@@ -104,9 +109,15 @@ class FakeSupabase:
                 if url.path == "/rest/v1/bravo_members":
                     member = fake.members.get(query["user_id"][0].split(".", 1)[1])
                     return self.reply(200, [member] if member else [])
-                if url.path == "/rest/v1/bravo_sessions":
+                if url.path == "/rest/v1/bravo_devices":
+                    return self.reply(200, [{"id": k, "equipment": v} for k, v in fake.devices.items()])
+                if url.path in ("/rest/v1/bravo_sessions", "/rest/v1/bravo_operations"):
                     device = query["device_id"][0].split(".", 1)[1]
-                    return self.reply(200, [{k: row[k] for k in ("source_key", "source_revision", "sha256", "storage_path")} for (d, _), row in fake.sessions.items() if d == device])
+                    source = fake.sessions if url.path.endswith("sessions") else fake.operations
+                    rows = sorted((row for (d, _), row in source.items() if d == device), key=lambda r: r["updated_at"])
+                    if "updated_at" in query:
+                        rows = [r for r in rows if r["updated_at"] > query["updated_at"][0].split(".", 1)[1]]
+                    return self.reply(200, rows)
                 self.reply(404, {"message": "rota"})
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -117,7 +128,12 @@ class FakeSupabase:
 class FakeFleet:
     def __init__(self, service, device):
         self._service = service
-        self.devices = {device: {"equipment": "Bravo 12"}}
+        self.devices = {device: {"equipment": "Bravo 12", "host": "192.168.2.2"}}
+        self.lock = threading.RLock()
+        self.active = device
+
+    def save(self):
+        pass
 
     def service(self, device_id=None):
         return self._service
@@ -177,3 +193,35 @@ class CloudTests(HistoryFixture):
         self.sync.run_once()
         self.assertFalse(self.sync.config["enabled"])
         self.assertIn("acesso", self.sync.state["error"])
+
+
+class TwoComputersTests(CloudTests):
+    def test_second_pc_receives_rov_from_cloud_without_echo(self):
+        self.sync.login(self.fake.url, "sb_publishable_teste", "operador@bravo", "senha")
+        self.sync.run_once()
+        writes = len(self.fake.writes)
+        # Segundo PC: nunca viu o ROV; só está logado na mesma conta.
+        other_service = Service(self.root / "pc2", start=False, mirror=True)
+        self.addCleanup(other_service.close)
+        stores = {}
+        class OtherFleet:
+            devices, lock, active = {}, threading.RLock(), None
+            def save(self): pass
+            def service(self, device_id=None):
+                return stores.setdefault(device_id, Service(self_root / device_id, start=False, mirror=True))
+        self_root = self.root / "pc2"
+        other = CloudSync(OtherFleet(), self.root / "pc2")
+        other.login(self.fake.url, "sb_publishable_teste", "gestao@bravo", "senha")
+        other.run_once()
+        self.addCleanup(lambda: [s.close() for s in stores.values()])
+        store = stores[self.device].store
+        self.assertEqual("Bravo 12", OtherFleet.devices[self.device]["equipment"])
+        self.assertEqual(["Casco"], [op["name"] for op in store.operations()])
+        local = store.files()
+        self.assertEqual(1, len(local))
+        self.assertEqual(6, local[0]["summary"]["records"])
+        self.assertTrue(store.points(local[0]["id"], "armed")["points"])
+        self.assertIn("recebida", other.state["message"])
+        # Nada recebido volta para a nuvem; uma nova rodada nos dois PCs não grava nada.
+        self.sync.run_once(); other.run_once()
+        self.assertEqual(writes, len(self.fake.writes))

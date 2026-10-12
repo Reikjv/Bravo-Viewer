@@ -176,6 +176,10 @@ class Fleet:
         """
         device = self.devices[device_id]
         state = self.state.setdefault(device_id, {})
+        if not device.get("host"):
+            # Conhecido só pela nuvem (outro PC enviou); aparece aqui quando estiver na rede deste PC.
+            state.update(message="Dados recebidos pela nuvem", online=None)
+            return
         state.update(running=True, message="Conectando ao ROV")
         try:
             client = RovClient(device["host"])
