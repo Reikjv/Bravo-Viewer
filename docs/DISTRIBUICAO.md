@@ -2,6 +2,14 @@
 
 Repositório principal: [Reikjv/Bravo-Viewer](https://github.com/Reikjv/Bravo-Viewer). Código, testes, catálogo e documentação de uso estão nesse repositório. A pasta local usa esse endereço como `origin`; o histórico inicial ficou no remoto `legacy` e na branch `legacy-main`. Os documentos anteriores da inspeção também foram preservados em `data/legacy_documents/`, fora da branch publicada. Capturas e bancos locais permanecem em `data/`, fora do Git.
 
+## Beta 0.5.0-beta.1
+
+Armazenamento compacto: cada log é lido uma vez e o banco guarda resumo, ocorrências, inventário e séries de 10 s; os .tlog originais são relidos sob demanda. Em ensaio local com os logs de bancada (1.054.950 mensagens): banco de 234 MB para 0,46 MB, importação em 9,9 s, conversão do histórico anterior em 17 s, sincronização de resumos do Desktop em 0,2 s, e carga de 60 s com 8 clientes sem erros, pico de 81 MB de memória e exportação completa reconstruída dos originais. [Release](https://github.com/Reikjv/Bravo-Viewer/releases/tag/v0.5.0-beta.1).
+
+## Beta 0.4.2-beta.1
+
+Logo própria (monograma BV) no executável, instalador e favicon. [Release](https://github.com/Reikjv/Bravo-Viewer/releases/tag/v0.4.2-beta.1).
+
 ## Beta 0.4.1-beta.1
 
 Desktop em janela nativa (WebView2) e instalador Inno Setup (`-Setup.exe`, com instalação silenciosa) além do pacote portátil. O CI gera o instalador, instala em modo silencioso e inicia o executável instalado no Windows. Corrige a tela que abria rolada até a âncora da aba. [Release](https://github.com/Reikjv/Bravo-Viewer/releases/tag/v0.4.1-beta.1).
