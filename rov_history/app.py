@@ -180,9 +180,8 @@ def create_server(service, host="127.0.0.1", port=8090, extension=None):
                 return self.download(chunks(), bundle_name(service.store, identifier), "application/zip")
             if path == "/api/original":
                 file = service.store.file(integer("file"))
-                filepath = Path(file["path"]).resolve()
-                originals = (service.store.directory / "originals").resolve()
-                if not filepath.is_file() or not filepath.is_relative_to(originals):
+                filepath = Path(file["path"]).resolve() if file["path"] else None
+                if filepath is None or not service.store.readable_original(filepath):
                     raise ValueError("Original indisponível para coleta ao vivo; exporte os tipos")
                 return self.send_file(filepath, f"bravo-viewer-original-{file['id']}{filepath.suffix}")
             if extension and path.startswith("/api/desktop/"):

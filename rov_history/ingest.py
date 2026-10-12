@@ -245,7 +245,8 @@ def read_file(store, destination, kind, progress=None, label=""):
     return summary, series, streams, events
 
 
-def import_file(store, source, source_key=None, progress=None, display_name=None, operation_id=None):
+def import_file(store, source, source_key=None, progress=None, display_name=None, operation_id=None, reference=False):
+    """reference=True: o log fica onde o BlueOS o grava (somente leitura); nada é copiado."""
     source = Path(source)
     if not source.is_file():
         raise ValueError("Arquivo não encontrado")
@@ -275,11 +276,14 @@ def import_file(store, source, source_key=None, progress=None, display_name=None
     with store.db() as db:
         if unchanged(db)[1]:
             return unchanged(db)[1]
-    originals = store.directory / "originals"
-    originals.mkdir(exist_ok=True)
-    destination = originals / (sha + suffix)
-    if not destination.exists():
-        shutil.copyfile(source, destination)
+    if reference:
+        destination = source
+    else:
+        originals = store.directory / "originals"
+        originals.mkdir(exist_ok=True)
+        destination = originals / (sha + suffix)
+        if not destination.exists():
+            shutil.copyfile(source, destination)
     summary, series, streams, events = read_file(store, destination, kind, progress, source.name)
     with store.write_lock, store.db() as db:
         old, result = unchanged(db)

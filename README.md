@@ -2,7 +2,7 @@
 
 <img src="catalog/card.png" alt="Bravo Viewer · BRS" width="320">
 
-Extensão BlueOS para consultar o histórico do ROV: horas, operações, energia, ocorrências, gráficos e inventário de tipos/campos. **Beta 0.5.0-beta.1**, desenvolvida para testes com BlueOS 1.4.6, ArduSub 4.7.1 e Navigator.
+Extensão BlueOS para consultar o histórico do ROV: horas, operações, energia, ocorrências, gráficos e inventário de tipos/campos. **Beta 0.6.0-beta.1**, desenvolvida para testes com BlueOS 1.4.6, ArduSub 4.7.1 e Navigator.
 
 ## Instalação
 
@@ -15,16 +15,16 @@ No gerenciador de **Extensões do BlueOS**, abra as configurações de fontes/re
 https://raw.githubusercontent.com/Reikjv/Bravo-Viewer/main/manifest.json
 ```
 
-Ative a fonte, procure **Bravo Viewer** e selecione a versão **0.5.0-beta.1**. Habilite versões de desenvolvimento/beta se necessário. O BlueOS escolhe ARM64 ou ARMv7 e baixa `ghcr.io/reikjv/bravo-viewer:0.5.0-beta.1`. É preciso acesso à internet durante o download; o painel funciona localmente após a instalação.
+Ative a fonte, procure **Bravo Viewer** e selecione a versão **0.6.0-beta.1**. Habilite versões de desenvolvimento/beta se necessário. O BlueOS escolhe ARM64 ou ARMv7 e baixa `ghcr.io/reikjv/bravo-viewer:0.6.0-beta.1`. É preciso acesso à internet durante o download; o painel funciona localmente após a instalação.
 
 O catálogo usa o suporte a fontes externas do BlueOS. A extensão não foi incluída no catálogo oficial. Consulte a [documentação do BlueOS](https://blueos.cloud/docs/stable/development/extensions/).
 
 ## Instaladores offline
 
-Baixe nas [releases](https://github.com/Reikjv/Bravo-Viewer/releases/tag/v0.5.0-beta.1):
+Baixe nas [releases](https://github.com/Reikjv/Bravo-Viewer/releases/tag/v0.6.0-beta.1):
 
-- [ARM64](https://github.com/Reikjv/Bravo-Viewer/releases/download/v0.5.0-beta.1/Bravo-Viewer-v0.5.0-beta.1-arm64.zip)
-- [ARMv7](https://github.com/Reikjv/Bravo-Viewer/releases/download/v0.5.0-beta.1/Bravo-Viewer-v0.5.0-beta.1-armv7.zip)
+- [ARM64](https://github.com/Reikjv/Bravo-Viewer/releases/download/v0.6.0-beta.1/Bravo-Viewer-v0.6.0-beta.1-arm64.zip)
+- [ARMv7](https://github.com/Reikjv/Bravo-Viewer/releases/download/v0.6.0-beta.1/Bravo-Viewer-v0.6.0-beta.1-armv7.zip)
 
 Confira o checksum `.zip.sha256`. Extraia o pacote no BlueOS e execute `bash install.sh` na pasta extraída. O instalador confere arquitetura e hashes, carrega a imagem incluída e preserva o volume em atualizações. A arquitetura relevante é a do **servidor Docker**, consultável com `docker version --format '{{.Server.Arch}}'`.
 
@@ -61,6 +61,10 @@ O `.tlog` original continua sendo a fonte completa: o inventário de dados e as 
 
 Logs de operações **encerradas** que o Bravo Viewer Desktop já copiou e conferiu (SHA-256) são liberados no ROV; resumos e gráficos permanecem. A Configuração mostra o espaço livre, e um aviso aparece abaixo de 15%.
 
+## Logs lidos direto do BlueOS
+
+A partir da 0.6 o Bravo Viewer lê os `.tlog`/`.bin` e os logs de serviços **onde o BlueOS os grava**, montados somente leitura no contêiner (`/root/.config/blueos/ardupilot-manager/logs` e `/var/logs/blueos/services`). Nada é baixado nem copiado: cada log é indexado uma vez (resumo, ocorrências, séries de 10 s) e relido sob demanda. Na atualização, as cópias feitas pelas versões anteriores são trocadas pelo log original e removidas. O Bravo nunca apaga nem altera logs do BlueOS.
+
 ## Bravo Viewer Desktop (Windows 11)
 
 Programa para o PC da base que copia os dados de um ou mais ROVs e faz o processamento pesado no computador. Abre em janela própria do Windows (WebView2, já incluído no Windows 11).
@@ -71,10 +75,12 @@ Programa para o PC da base que copia os dados de um ou mais ROVs e faz o process
 
 Sem assinatura digital, o Windows pode exibir "O Windows protegeu o computador": use **Mais informações → Executar assim mesmo**.
 
-1. Clique em **Conectar ROV** e informe o IP do BlueOS (normalmente `192.168.2.2`). O ROV precisa estar com o Bravo Viewer 0.4.0 ou posterior.
-2. Com o ROV na rede, o Desktop sincroniza a cada minuto em duas etapas: primeiro operações, resumos, ocorrências e gráficos das sessões novas ou alteradas (segundos); depois, em segundo plano, os `.tlog` completos, retomando cópias interrompidas e conferindo o SHA-256. **Sincronizar agora** força uma busca.
+1. Ao abrir, o programa procura sozinho os ROVs com Bravo Viewer na rede (cabo do ROV e rede da base) e repete a busca a cada 2 minutos. A tela **Frota** mostra um cartão por ROV com status, operação atual e sincronização. **Adicionar por IP** continua disponível.
+2. Com o ROV na rede, o Desktop sincroniza a cada minuto: baixa os `.tlog` completos (retomando cópias interrompidas e conferindo o SHA-256) e **processa tudo no PC**. Do ROV vem pronto apenas o que não tem log, como a coleta ao vivo. Na bancada, 177 sessões e 3,7 milhões de mensagens do Navigator foram baixadas e processadas em 58 s; as sincronizações seguintes levam frações de segundo.
 3. Cada ROV é identificado por um código interno fixo; renomear o equipamento (Bravo 1, Bravo 10…) não mistura históricos. Vários ROVs ficam no seletor **Equipamento**.
 4. O PC guarda todas as operações, inclusive as já removidas do ROV pelo limite de 20. Exportações e ZIPs são gerados no PC, com o nome do equipamento e da operação (`Bravo-10_Inspecao-Casco_2026-10-11.zip`).
+
+**Nuvem (Supabase):** em Configuração → Nuvem, entre com a conta da pessoa (URL do projeto, chave publishable, e-mail e senha). A senha não é gravada e a sessão fica protegida pela conta do Windows. O envio é automático e em fila: operações, resumos, gráficos e logs originais (upload retomável). Sem internet, continua quando a conexão voltar.
 
 Nome, local e encerramento da operação são feitos no Bravo Viewer do ROV; no Desktop esses campos são somente leitura. Os dados ficam em `%LOCALAPPDATA%\BravoViewerDesktop`. Uma segunda abertura do programa apenas mostra a janela existente. Envio para banco online e painel do gestor são as próximas etapas.
 

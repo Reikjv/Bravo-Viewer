@@ -21,7 +21,7 @@ jobs:
           try:
               with urllib.request.urlopen('https://ghcr.io/token?service=ghcr.io&scope=repository:reikjv/bravo-viewer:pull', timeout=15) as r:
                   token = json.load(r)['token']
-              req = urllib.request.Request('https://ghcr.io/v2/reikjv/bravo-viewer/manifests/0.5.0-beta.1', headers={'Authorization':'Bearer '+token, 'Accept':'application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.index.v1+json'})
+              req = urllib.request.Request('https://ghcr.io/v2/reikjv/bravo-viewer/manifests/0.6.0-beta.1', headers={'Authorization':'Bearer '+token, 'Accept':'application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.index.v1+json'})
               with urllib.request.urlopen(req, timeout=15) as r:
                   data = json.load(r)
               print('Anonymous access OK:', [m['platform'] for m in data['manifests']])

@@ -13,7 +13,7 @@ from .blueos import BlueOS, validate_host
 from .compact import Series
 from .ingest import Summary, import_file, timestamp
 from .model import clean, dumps, flatten
-from .store import Store
+from .store import Store, blueos_path
 
 
 SETTLE_SECONDS = 600
@@ -73,6 +73,9 @@ class Service:
             if legacy:
                 # Históricos anteriores à 0.5 guardavam cada mensagem; converte uma única vez.
                 self.submit("compact")
+            if not mirror:
+                # Passa a usar os logs na pasta do BlueOS e remove cópias duplicadas.
+                self.submit("adopt")
 
     def configure(self, updates):
         allowed = {}
@@ -142,6 +145,8 @@ class Service:
                     result = build_bundle(self.store, job_id, args["context"], self.reporter(job_id), self.stop)
                     if args["context"]["scope"] == "operation":
                         self.store.set_operation_bundle(args["context"]["operation"], job_id)
+                elif action == "adopt":
+                    result = self.store.adopt_blueos_logs(lambda text: self.jobs[job_id].update(progress=text))
                 elif action == "compact":
                     result = {"sessions": self.store.compact_legacy(lambda text: self.jobs[job_id].update(progress=text))}
                 elif action == "close_operation":
@@ -213,16 +218,20 @@ class Service:
                 skipped += 1
                 continue
             progress(item["name"], 0)
-            local = inbox / item["name"]
+            # Com a pasta do BlueOS montada, o log é lido onde está: sem download nem cópia.
+            mounted = blueos_path(item["path"])
+            local = mounted if mounted is not None and mounted.is_file() else inbox / item["name"]
             try:
-                client.download(item["path"], local)
-                result = import_file(self.store, local, key, progress)
+                if local is not mounted:
+                    client.download(item["path"], local)
+                result = import_file(self.store, local, key, progress, reference=local is mounted)
                 imported.append(result)
                 index[key] = marker
             except Exception as error:
                 errors.append({"path": item["path"], "error": str(error)})
             finally:
-                local.unlink(missing_ok=True)
+                if local is not mounted:
+                    local.unlink(missing_ok=True)
         tmp = index_path.with_suffix(".tmp")
         tmp.write_text(dumps(index), encoding="utf-8")
         tmp.replace(index_path)

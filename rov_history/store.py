@@ -6,7 +6,9 @@ import io
 import json
 from pathlib import Path
 import sqlite3
+import hashlib
 import itertools
+import os
 import shutil
 import threading
 import time
@@ -56,6 +58,21 @@ def operation_summary(files):
                        "mean": sum(d["weighted"] for d in depths) / seconds if seconds else None,
                        "submerged_seconds": seconds, "unit": "m", "source": depth_kind}
     return result
+
+
+# Pastas de logs do BlueOS montadas somente leitura no contêiner (Dockerfile/install.sh).
+BLUEOS_LOGS = Path(os.environ.get("BRAVO_BLUEOS_LOGS", "/blueos"))
+BLUEOS_FOLDERS = {"ardupilot_logs/": "ardupilot_logs/", "system_logs/": "system_logs/"}
+
+
+def blueos_path(remote):
+    """Caminho do explorador do BlueOS (/ardupilot_logs/logs/x.tlog) na pasta montada, se existir."""
+    remote = remote.lstrip("/")
+    for prefix, local in BLUEOS_FOLDERS.items():
+        if remote.startswith(prefix):
+            path = (BLUEOS_LOGS / local / remote[len(prefix):]).resolve()
+            return path if path.is_relative_to(BLUEOS_LOGS.resolve()) else None
+    return None
 
 
 class Store:
@@ -247,19 +264,58 @@ class Store:
         return self.release_originals()
 
     def release_originals(self):
-        """Libera no ROV os logs de operações encerradas já copiados para o PC; resumos e gráficos ficam."""
+        """Libera cópias próprias de logs de operações encerradas já copiados para o PC.
+
+        Logs lidos direto da pasta do BlueOS não são do Bravo e nunca são apagados aqui.
+        """
         originals = (self.directory / "originals").resolve()
         with self.db() as db:
             rows = db.execute("SELECT f.id,f.path FROM files f JOIN operations o ON o.id=f.operation_id WHERE o.status='closed' AND f.pc_copied_at IS NOT NULL AND f.path!=''").fetchall()
         released = 0
         for row in rows:
             path = Path(row["path"]).resolve()
-            if path.is_relative_to(originals) and path.is_file():
+            if not path.is_relative_to(originals):
+                continue
+            if path.is_file():
                 path.unlink()
                 released += 1
             with self.write_lock, self.db() as db:
                 db.execute("UPDATE files SET path='' WHERE id=?", (row["id"],))
         return released
+
+    def readable_original(self, path):
+        """Logs servidos ao PC: cópias próprias ou a pasta do BlueOS montada somente leitura."""
+        path = Path(path).resolve()
+        roots = [(self.directory / "originals").resolve(), BLUEOS_LOGS.resolve()]
+        return path.is_file() and any(path.is_relative_to(root) for root in roots)
+
+    def adopt_blueos_logs(self, progress=lambda text: None):
+        """Troca cópias antigas pelo log original na pasta do BlueOS e apaga cópias sem uso."""
+        adopted = 0
+        if BLUEOS_LOGS.is_dir():
+            with self.db() as db:
+                rows = db.execute("SELECT id,source_key,path,sha256 FROM files WHERE source_key LIKE 'blueos:%' AND path!=''").fetchall()
+            for row in rows:
+                local = blueos_path(row["source_key"].split(":", 2)[2])
+                if local is None or str(local) == row["path"] or not local.is_file():
+                    continue
+                progress(f"Usando o log do BlueOS: {local.name}")
+                with local.open("rb") as file:
+                    if hashlib.file_digest(file, "sha256").hexdigest() != row["sha256"]:
+                        continue
+                with self.write_lock, self.db() as db:
+                    db.execute("UPDATE files SET path=? WHERE id=?", (str(local), row["id"]))
+                adopted += 1
+        originals = self.directory / "originals"
+        removed = 0
+        if originals.is_dir():
+            with self.db() as db:
+                used = {Path(row["path"]).name for row in db.execute("SELECT path FROM files WHERE path!=''")}
+            for path in originals.iterdir():
+                if path.is_file() and path.name not in used:
+                    path.unlink()
+                    removed += 1
+        return {"adopted": adopted, "removed": removed}
 
     def compact_legacy(self, progress=lambda text: None):
         """Converte históricos anteriores à 0.5: gera séries e remove as mensagens guardadas uma a uma."""

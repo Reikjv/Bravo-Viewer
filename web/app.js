@@ -5,6 +5,7 @@ if (!base.pathname.endsWith("/")) base.pathname = base.pathname.replace(/[^/]*$/
 base.search = ""; base.hash = "";
 const endpoint = path => new URL(path, base).href;
 const titles = {
+  fleet: ["Frota", "ROVs encontrados na rede e sincronizados neste PC."],
   overview: ["Visão geral", "Horas, operações, energia e ocorrências do equipamento."],
   operations: ["Operações", "Operação atual, encerramento com ZIP e histórico das operações anteriores."],
   sessions: ["Sessões", "Histórico por arquivo ou coleta, períodos armados e observações."],
@@ -21,7 +22,7 @@ let completedJobs = new Set(), refreshing = false, chartRequest = 0;
 let configDirty = false;
 let initialized = false;
 let exportJob = null, closeJob = null, operationsData = null, opDirty = false;
-let desktopDevice, desktopSync, diskWarned = false;
+let desktopDevice, desktopSync, diskWarned = false, fleetData = {devices: [], active: null}, cloudDirty = false;
 const opExportJobs = new Set();
 let chartAbort = null;
 const loadedTabs = new Set(), loadingTabs = new Set();
@@ -83,7 +84,8 @@ function go(tab, push = true) {
   if (!titles[tab]) return;
   const changed = active !== tab;
   active = tab;
-  document.querySelectorAll(".page").forEach(page => page.hidden = page.id !== tab);
+  document.querySelectorAll(".page").forEach(page => page.hidden = page.id !== (tab === "fleet" ? "fleet-page" : tab));
+  document.body.classList.toggle("on-fleet", tab === "fleet");
   document.querySelectorAll("nav button").forEach(button => button.classList.toggle("active", button.dataset.tab === tab));
   $("page-title").textContent = titles[tab][0]; $("page-description").textContent = titles[tab][1];
   if (push && location.hash.slice(1) !== tab) history.pushState(null, "", "#" + tab);
@@ -96,7 +98,8 @@ async function loadActivePage() {
   if (loadingTabs.has(tab)) return;
   loadingTabs.add(tab);
   try {
-    if (tab === "operations") await loadOperations();
+    if (tab === "fleet") await loadFleet();
+    else if (tab === "operations") await loadOperations();
     else if (tab === "explorer") await loadExplorer();
     else if (tab === "charts") await loadChartMetrics();
     else if (tab === "events") await loadEvents();
@@ -379,9 +382,44 @@ async function loadEvents(reset = true) {
   $("events-page").textContent = `${fmt(eventOffset + (data.rows.length ? 1 : 0), 0)}–${fmt(eventOffset + data.rows.length, 0)} de ${fmt(data.total, 0)}`;
   $("events-prev").disabled = eventOffset === 0; $("events-next").disabled = eventOffset + data.rows.length >= data.total;
 }
+function fleetCard(device) {
+  const op = device.current, s = op?.summary || {}, depth = s.depth || {};
+  const state = device.running ? ["Sincronizando", ""] : device.online === false ? ["Fora da rede", "offline"] : device.last_sync ? ["Na rede", "connected"] : ["Aguardando", ""];
+  const extra = device.addresses?.length > 1 ? ` · também em ${device.addresses.filter(a => a !== device.host).join(", ")}` : "";
+  return `<article class="rov-card ${device.id === fleetData.active ? "active" : ""}">
+    <header><span class="equipment-icon"><svg class="icon"><use href="#i-rov"/></svg></span><div><h2>${escape(device.equipment || "ROV")}</h2><small>${escape(device.host)}${escape(extra)}</small></div><span class="status ${state[1]}">${state[0]}</span></header>
+    <div class="rov-op"><small>OPERAÇÃO ATUAL</small><strong>${escape(op?.name || "—")}</strong><small>${escape([op?.location, op?.client].filter(Boolean).join(" · ") || "Sem local informado")}${op ? ` · desde ${escape(date(op.started_at))}` : ""}</small></div>
+    <div class="rov-stats"><div><small>Tempo armado</small><strong>${duration(s.armed_seconds || 0)}</strong></div><div><small>Prof. máxima</small><strong>${depth.available ? meters(depth.max) : "Sem sensor"}</strong></div><div><small>Sessões</small><strong>${fmt(device.sessions || 0, 0)}</strong></div></div>
+    <footer><span class="muted">${escape(device.message || (device.last_sync ? `Sincronizado em ${date(device.last_sync)}` : "Ainda não sincronizado"))}${device.pending_logs ? ` · ${plural(device.pending_logs, "log pendente", "logs pendentes")}` : ""}${device.closed ? ` · ${plural(device.closed, "operação encerrada", "operações encerradas")}` : ""}</span><button class="secondary" data-fleet-sync="${device.id}">Sincronizar</button><button data-fleet-open="${device.id}">Abrir</button></footer>
+  </article>`;
+}
+function renderCloud(state) {
+  if (!state) return;
+  $("cloud-pill").textContent = state.logged_in ? (state.running ? "ENVIANDO" : state.error ? "ATENÇÃO" : "CONECTADO") : "DESCONECTADO";
+  $("cloud-status").textContent = state.logged_in ? `${state.email} · ${state.message}${state.pending ? ` · ${plural(state.pending, "sessão pendente", "sessões pendentes")}` : ""}` : "Entre com a conta do Supabase para enviar os dados da frota.";
+  $("fleet-cloud").textContent = state.logged_in ? ` · Nuvem: ${state.message}` : " · Nuvem desconectada";
+  if (document.activeElement.closest?.("#cloud-form") == null && !cloudDirty) {
+    $("cloud-url").value = state.url || "https://vkilosmlgnvtlseuivoj.supabase.co";
+    $("cloud-key").value = state.key || "";
+    $("cloud-email").value = state.email || "";
+    $("cloud-enabled").checked = state.logged_in ? state.enabled : true;
+  }
+}
+async function loadFleet() {
+  if (!document.body.classList.contains("desktop")) return;
+  fleetData = await api("desktop/fleet");
+  const scan = fleetData.scan;
+  $("scan-spinner").hidden = !scan.running;
+  $("scan-text").textContent = scan.running ? "Procurando ROVs na rede…" : scan.last ? `Última busca às ${new Date(scan.last * 1000).toLocaleTimeString("pt-BR")} · ${plural(scan.found, "ROV encontrado", "ROVs encontrados")}` : "A busca na rede começa ao abrir o programa.";
+  $("fleet-cards").innerHTML = fleetData.devices.length ? fleetData.devices.map(fleetCard).join("") : '<div class="fleet-empty"><h2>Nenhum ROV ainda</h2><p>Conecte o PC ao cabo do ROV ou à rede da base. O programa encontra os ROVs com Bravo Viewer sozinho; se preferir, use Adicionar por IP.</p></div>';
+}
 function renderFleet(data) {
   if (data.mode !== "desktop") return;
+  const first = !document.body.classList.contains("desktop");
   document.body.classList.add("desktop");
+  if (first && !location.hash) go("fleet", false);
+  if (active === "fleet" && !loadingTabs.has("fleet")) task(loadFleet)();
+  renderCloud(data.cloud);
   $("fleet").hidden = false;
   document.querySelectorAll("#op-form input, #op-form textarea").forEach(input => { input.readOnly = true; });
   const select = $("fleet-device");
@@ -493,6 +531,9 @@ async function loadInventory() {
 document.querySelectorAll("[data-tab]").forEach(button => button.onclick = () => go(button.dataset.tab));
 document.querySelectorAll("[data-goto]").forEach(button => button.onclick = event => { event.preventDefault(); go(button.dataset.goto); });
 document.addEventListener("click", task(async event => {
+  const open = event.target.closest("[data-fleet-open]"), sync = event.target.closest("[data-fleet-sync]");
+  if (open) { await post("desktop-select", {device: open.dataset.fleetOpen}); await loadStatus(); go("overview"); return; }
+  if (sync) { await post("desktop-sync", {device: sync.dataset.fleetSync}); notice("Sincronização iniciada."); await loadFleet(); return; }
   const exporter = event.target.closest("[data-op-export]");
   if (!exporter) return;
   exporter.disabled = true; exporter.textContent = "Gerando…";
@@ -545,6 +586,18 @@ $("op-form").onsubmit = task(async event => {
 $("close-op").onclick = $("overview-close-op").onclick = openCloseDialog;
 $("fleet-device").onchange = task(async () => { await post("desktop-select", {device: $("fleet-device").value}); await loadStatus(); });
 $("fleet-sync").onclick = task(async () => { await post("desktop-sync", {}); notice("Sincronização iniciada."); });
+$("cloud-form").oninput = () => { cloudDirty = true; };
+$("cloud-form").onsubmit = task(async event => {
+  event.preventDefault();
+  notice("Entrando na nuvem…");
+  const state = await post("desktop-cloud-login", {url: $("cloud-url").value, key: $("cloud-key").value, email: $("cloud-email").value, password: $("cloud-password").value, enabled: $("cloud-enabled").checked});
+  $("cloud-password").value = ""; cloudDirty = false;
+  renderCloud(state); notice(state.message);
+});
+$("cloud-send").onclick = task(async () => { renderCloud(await post("desktop-cloud-sync", {})); notice("Envio para a nuvem iniciado."); });
+$("cloud-logout").onclick = task(async () => { renderCloud(await post("desktop-cloud-logout", {})); notice("Nuvem desconectada neste PC."); });
+$("scan-now").onclick = task(async () => { await post("desktop-scan", {}); $("scan-spinner").hidden = false; $("scan-text").textContent = "Procurando ROVs na rede…"; });
+$("fleet-add-ip").onclick = () => $("fleet-add").click();
 $("fleet-add").onclick = task(async () => {
   const host = prompt("IP ou nome do BlueOS do ROV:", "192.168.2.2");
   if (!host) return;

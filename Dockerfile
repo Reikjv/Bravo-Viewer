@@ -15,13 +15,13 @@ COPY rov_history ./rov_history
 COPY web ./web
 COPY docs/catalogos ./docs/catalogos
 EXPOSE 8090
-LABEL version="0.5.0-beta.1"
+LABEL version="0.6.0-beta.1"
 LABEL org.opencontainers.image.title="Bravo Viewer"
 LABEL org.opencontainers.image.source="https://github.com/Reikjv/Bravo-Viewer"
 LABEL org.reikjv.history.managed="true"
 LABEL type="tool"
 LABEL tags='["logs","history","monitoring","export"]'
-LABEL permissions='{"HostConfig":{"NetworkMode":"host","Memory":268435456,"NanoCpus":500000000,"Binds":["/usr/blueos/extensions/reikjv-rov-history:/data"]}}'
+LABEL permissions='{"HostConfig":{"NetworkMode":"host","Memory":268435456,"NanoCpus":500000000,"Binds":["/usr/blueos/extensions/reikjv-rov-history:/data","/root/.config/blueos/ardupilot-manager/logs:/blueos/ardupilot_logs/logs:ro","/var/logs/blueos/services:/blueos/system_logs:ro"]}}'
 LABEL authors='[{"name":"Reikjv","email":"141414061+Reikjv@users.noreply.github.com"}]'
 LABEL company='{"name":"Bravo Viewer","about":"Histórico e diagnóstico do ROV · Reikjv"}'
 LABEL readme="https://raw.githubusercontent.com/Reikjv/Bravo-Viewer/main/README.md"
