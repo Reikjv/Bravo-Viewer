@@ -393,6 +393,15 @@ function fleetCard(device) {
     <footer><span class="muted">${escape(device.message || (device.last_sync ? `Sincronizado em ${date(device.last_sync)}` : "Ainda não sincronizado"))}${device.pending_logs ? ` · ${plural(device.pending_logs, "log pendente", "logs pendentes")}` : ""}${device.closed ? ` · ${plural(device.closed, "operação encerrada", "operações encerradas")}` : ""}</span><button class="secondary" data-fleet-sync="${device.id}">Sincronizar</button><button data-fleet-open="${device.id}">Abrir</button></footer>
   </article>`;
 }
+function renderUpdate(update) {
+  const show = update && (update.available || update.downloading || update.error);
+  $("update-bar").hidden = !show;
+  if (!show) return;
+  $("update-title").textContent = update.downloading ? `Baixando a versão ${update.available} · ${update.progress}%` : update.error ? "Não foi possível atualizar" : `Nova versão disponível: ${update.available}`;
+  $("update-detail").textContent = update.error || (update.downloading ? "O programa fecha e reabre sozinho ao terminar. Dados, ROVs e login da nuvem são mantidos." : update.installable ? `Você está na ${update.current}. A atualização leva cerca de um minuto; dados e login são mantidos.` : `Você está na ${update.current}. Esta cópia é portátil: baixe o instalador novo na página da versão.`);
+  $("update-notes").hidden = !update.url; if (update.url) $("update-notes").href = update.url;
+  $("update-install").hidden = !update.available || !update.installable || update.downloading;
+}
 function renderCloud(state) {
   if (!state) return;
   $("cloud-pill").textContent = state.logged_in ? (state.running ? "ENVIANDO" : state.error ? "ATENÇÃO" : "CONECTADO") : "DESCONECTADO";
@@ -421,6 +430,7 @@ function renderFleet(data) {
   if (first && !location.hash) go("fleet", false);
   if (active === "fleet" && !loadingTabs.has("fleet")) task(loadFleet)();
   renderCloud(data.cloud);
+  renderUpdate(data.update);
   $("fleet").hidden = false;
   document.querySelectorAll("#op-form input, #op-form textarea").forEach(input => { input.readOnly = true; });
   const select = $("fleet-device");
@@ -587,6 +597,10 @@ $("op-form").onsubmit = task(async event => {
 $("close-op").onclick = $("overview-close-op").onclick = openCloseDialog;
 $("fleet-device").onchange = task(async () => { await post("desktop-select", {device: $("fleet-device").value}); await loadStatus(); });
 $("fleet-sync").onclick = task(async () => { await post("desktop-sync", {}); notice("Sincronização iniciada."); });
+$("update-install").onclick = task(async () => {
+  if (!confirm("Atualizar agora? O Bravo Viewer fecha por instantes, instala a versão nova e abre de novo. Sincronizações em andamento continuam depois.")) return;
+  renderUpdate(await post("desktop-update-install", {}));
+});
 $("cloud-form").oninput = () => { cloudDirty = true; };
 $("cloud-form").onsubmit = task(async event => {
   event.preventDefault();

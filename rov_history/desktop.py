@@ -23,6 +23,7 @@ from . import __version__
 from .app import create_server
 from .blueos import validate_host
 from .cloud import CloudError, CloudSync
+from .updater import Updater
 from .ingest import import_file
 from .model import dumps
 from .service import Service
@@ -125,6 +126,7 @@ class Fleet:
         self.wake = threading.Event()
         self.scan_wake = threading.Event()
         self.cloud = CloudSync(self, self.directory)
+        self.updater = Updater(self.directory)
         self.scan = {"running": False, "last": None, "found": 0}
 
     def save(self):
@@ -312,7 +314,7 @@ class Fleet:
 
     def status(self):
         devices = [{"id": device_id, **device, **self.state.get(device_id, {})} for device_id, device in self.devices.items()]
-        return {"mode": "desktop", "active_device": self.active, "scan": self.scan, "cloud": self.cloud.public(), "devices": sorted(devices, key=lambda d: d.get("equipment", ""))}
+        return {"mode": "desktop", "active_device": self.active, "scan": self.scan, "cloud": self.cloud.public(), "update": self.updater.state, "devices": sorted(devices, key=lambda d: d.get("equipment", ""))}
 
 
 class ActiveService:
@@ -341,6 +343,12 @@ class DesktopApi:
             return self.fleet.cloud.public()
         raise ValueError("Rota não encontrada")
 
+    def _install(self, on_exit):
+        try:
+            self.fleet.updater.install(on_exit)
+        except Exception as error:
+            self.fleet.updater.state.update(downloading=False, error=str(error))
+
     def post(self, action, body):
         if action == "connect":
             host = str(body.get("host", "")).strip()
@@ -360,6 +368,13 @@ class DesktopApi:
             self.fleet.scan_wake.set()
             return {"ok": True}
         cloud = self.fleet.cloud
+        if action == "update-check":
+            return self.fleet.updater.check()
+        if action == "update-install":
+            # Baixa e confere em segundo plano; o programa fecha só para o instalador trocar os arquivos.
+            exit_later = lambda: threading.Timer(1.5, os._exit, [0]).start()
+            threading.Thread(target=self._install, args=(exit_later,), daemon=True).start()
+            return self.fleet.updater.state
         if action == "cloud-login":
             return cloud.login(str(body.get("url", "")).strip(), str(body.get("key", "")).strip(), str(body.get("email", "")).strip(), str(body.get("password", "")), bool(body.get("enabled", True)))
         if action == "cloud-logout":
@@ -451,6 +466,7 @@ def main():
     threading.Thread(target=fleet.loop, daemon=True).start()
     threading.Thread(target=fleet.scan_loop, daemon=True).start()
     threading.Thread(target=fleet.cloud.loop, args=(fleet.stop,), daemon=True).start()
+    threading.Thread(target=fleet.updater.loop, args=(fleet.stop,), daemon=True).start()
     logging.info("Bravo Viewer Desktop %s em http://127.0.0.1:%s", __version__, port)
     try:
         if args.no_window:
