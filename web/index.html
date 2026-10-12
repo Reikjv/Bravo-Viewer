@@ -35,10 +35,11 @@
     <button data-tab="sessions"><svg class="icon"><use href="#i-clock"/></svg>Sessões</button>
     <button data-tab="charts"><svg class="icon"><use href="#i-activity"/></svg>Energia e gráficos</button>
     <button data-tab="events"><svg class="icon"><use href="#i-bell"/></svg>Ocorrências</button>
-    <button data-tab="explorer"><svg class="icon"><use href="#i-database"/></svg>Inventário de dados</button>
     <button data-tab="files"><svg class="icon"><use href="#i-folder"/></svg>Arquivos e exportação</button>
-    <button data-tab="capabilities"><svg class="icon"><use href="#i-target"/></svg>Dados e possibilidades</button>
     <button data-tab="settings"><svg class="icon"><use href="#i-gear"/></svg>Configuração</button>
+    <div class="nav-label nav-group">AVANÇADO</div>
+    <button data-tab="explorer"><svg class="icon"><use href="#i-database"/></svg>Inventário de dados</button>
+    <button data-tab="capabilities"><svg class="icon"><use href="#i-target"/></svg>Dados e possibilidades</button>
   </nav>
   <div class="sidebar-bottom"><span class="tag">BETA <span id="version"></span></span><p>Horas · operações · energia<br>Ocorrências e inventário</p></div>
 </aside>
@@ -80,9 +81,9 @@
     <div id="operations-table" class="table-wrap panel"></div>
   </section>
   <section id="sessions" class="page" hidden>
-    <div class="section-toolbar"><p class="muted">Cada arquivo ou coleta mantém o próprio histórico. Os períodos armados são identificados dentro de cada sessão.</p><a class="button secondary" id="export-summary" href="api/export-summary"><svg class="icon"><use href="#i-download"/></svg>Resumo JSON</a></div>
+    <div class="filters panel session-filters"><label>Operação<select id="session-op"></select></label><div class="session-totals" id="session-totals"></div></div>
     <div id="sessions-table" class="table-wrap panel"></div>
-    <article class="panel"><div class="panel-head"><h2>Detalhes da sessão</h2></div><label class="muted">Sessão<select id="session-select"></select></label><div id="session-detail"></div><label class="muted">Observações<textarea id="session-note" rows="3" placeholder="Local, serviço realizado, condições e observações da operação"></textarea></label><button id="save-note">Salvar observação</button></article>
+    <article class="panel"><div class="panel-head"><h2>Detalhes da sessão</h2></div><label class="muted">Log da operação<select id="session-select"></select></label><div id="session-detail"></div><label class="muted">Observações<textarea id="session-note" rows="3" placeholder="Local, serviço realizado, condições e observações da operação"></textarea></label><button id="save-note">Salvar observação</button></article>
   </section>
   <section id="explorer" class="page" hidden>
     <p class="muted">Inventário de todos os tipos e campos decodificados, incluindo dados que ainda não têm painel dedicado. Consulte a grade em Dados e possibilidades para conhecer o escopo desta versão.</p>
@@ -103,11 +104,10 @@
     <div id="events-table" class="table-wrap panel"></div><div class="pagination"><button id="events-prev" class="secondary">← Anterior</button><span id="events-page"></span><button id="events-next" class="secondary">Próxima →</button></div>
   </section>
   <section id="files" class="page" hidden>
-    <div class="import-panel panel"><div><h2>Preserve todos os registros</h2><p>Importe telemetria, DataFlash e logs de serviços. Os originais ficam disponíveis para download.</p></div><label class="upload-button rov-only"><svg class="icon"><use href="#i-upload"/></svg>Importar logs<input type="file" id="upload" multiple accept=".tlog,.bin,.log,.gz"></label><button id="sync" class="secondary rov-only"><svg class="icon"><use href="#i-refresh"/></svg>Buscar no BlueOS</button></div>
-    <div class="section-toolbar"><span id="files-size" class="muted"></span><label class="compact muted">Filtrar arquivos<input id="files-search" placeholder="linux2rest, .tlog, bootstrap…"></label></div>
+    <div class="import-panel panel"><div><h2>Logs de voo do ROV</h2><p>Telemetria (.tlog) e logs do autopiloto (.bin) de cada operação, prontos para baixar.</p></div><label class="upload-button rov-only"><svg class="icon"><use href="#i-upload"/></svg>Importar logs<input type="file" id="upload" multiple accept=".tlog,.bin"></label><button id="sync" class="secondary rov-only"><svg class="icon"><use href="#i-refresh"/></svg>Buscar no BlueOS</button></div>
+    <div class="section-toolbar"><span id="files-size" class="muted"></span><label class="compact muted">Filtrar<input id="files-search" placeholder="nome do log ou operação…"></label></div>
     <div id="files-table" class="table-wrap panel"></div>
-    <article class="panel"><h2>Inventário de arquivos no BlueOS</h2><p id="inventory-info" class="muted"></p><div id="remote-files-table" class="table-wrap"></div><p class="hint">Inclui arquivos vazios e arquivos ainda não importados das pastas do autopiloto e dos serviços. Cada busca atualiza esta lista, que não abrange o armazenamento de todas as extensões.</p></article>
-    <p class="hint">Arquivos ativos representam uma cópia do momento. Atualizações substituem a versão consultada da mesma fonte, e arquivos idênticos são reconhecidos para evitar importações repetidas. O formato MCAP fica para uma próxima etapa de compatibilidade.</p>
+    <details class="panel advanced"><summary>Avançado · todos os arquivos encontrados no BlueOS</summary><p id="inventory-info" class="muted"></p><div id="remote-files-table" class="table-wrap"></div><p class="hint">Lista técnica das pastas do autopiloto e dos serviços do BlueOS, inclusive arquivos vazios. Só os logs de voo entram no histórico.</p></details>
   </section>
   <section id="capabilities" class="page" hidden>
     <article class="panel"><h2>O que esta versão oferece e o que pode vir depois</h2><p class="muted">O foco inicial é o histórico de horas, operações, energia e ocorrências. Os demais tipos encontrados continuam acessíveis no inventário, mesmo sem análise ou gráfico dedicado.</p><p id="capability-note" class="hint"></p></article>

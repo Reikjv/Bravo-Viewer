@@ -191,6 +191,8 @@ class Fleet:
             processed = lambda remote, mine: mine and mine["sha256"] == remote["sha256"] and mine["path"] and Path(mine["path"]).is_file()
             # 1) Sem log para baixar: resumo pronto do ROV (rápido).
             summaries = 0
+            # Logs de serviço do BlueOS não fazem parte do histórico do ROV.
+            manifest["files"] = [f for f in manifest["files"] if not (f["kind"] == "log" and f["source_key"].startswith("blueos:"))]
             for remote in manifest["files"]:
                 mine = local.get(remote["source_key"])
                 if remote["kind"] != "live" and remote["has_original"] or processed(remote, mine):

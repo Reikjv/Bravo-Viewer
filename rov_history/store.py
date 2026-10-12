@@ -283,6 +283,25 @@ class Store:
                 db.execute("UPDATE files SET path='' WHERE id=?", (row["id"],))
         return released
 
+    def drop_service_logs(self):
+        """Tira do histórico os logs internos dos serviços do BlueOS (rede, câmera, ping…).
+
+        Eles continuam no BlueOS; só deixam de ocupar listas, relatórios e sincronização.
+        Logs importados manualmente pelo usuário são mantidos.
+        """
+        originals = (self.directory / "originals").resolve()
+        with self.db() as db:
+            rows = db.execute("SELECT id,path FROM files WHERE kind='log' AND source_key LIKE 'blueos:%'").fetchall()
+        for row in rows:
+            with self.write_lock, self.db() as db:
+                for table in ("records", "events", "streams", "series_points"):
+                    db.execute(f"DELETE FROM {table} WHERE file_id=?", (row["id"],))
+                db.execute("DELETE FROM files WHERE id=?", (row["id"],))
+            path = Path(row["path"]).resolve() if row["path"] else None
+            if path and path.is_relative_to(originals) and path.is_file():
+                path.unlink()
+        return len(rows)
+
     def readable_original(self, path):
         """Logs servidos ao PC: cópias próprias ou a pasta do BlueOS montada somente leitura."""
         path = Path(path).resolve()
@@ -407,7 +426,10 @@ class Store:
 
     def files(self):
         with self.db() as db:
-            rows = db.execute("SELECT f.*, (SELECT count(*) FROM streams s WHERE s.file_id=f.id) AS stream_count FROM files f ORDER BY imported_at DESC").fetchall()
+            rows = db.execute("SELECT f.*, (SELECT count(*) FROM streams s WHERE s.file_id=f.id) AS stream_count, "
+                              "(SELECT min(first_ts) FROM streams s WHERE s.file_id=f.id AND first_ts IS NOT NULL) AS first_ts, "
+                              "(SELECT max(last_ts) FROM streams s WHERE s.file_id=f.id AND last_ts IS NOT NULL) AS last_ts "
+                              "FROM files f ORDER BY imported_at DESC").fetchall()
         return [{**dict(row), "summary": json.loads(row["summary"]), "path": None} for row in rows]
 
     def file(self, file_id):

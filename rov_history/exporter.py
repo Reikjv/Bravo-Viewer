@@ -130,10 +130,54 @@ def operation_section(op):
     return '<h2>Operação</h2>' + report_table(["Informação", "Valor"], rows) + notes
 
 
+def report_zone(name):
+    try:
+        from zoneinfo import ZoneInfo
+        return ZoneInfo(name) if name else datetime.now().astimezone().tzinfo
+    except Exception:
+        return datetime.now().astimezone().tzinfo
+
+
+def operation_bundle(store, identifier, context, progress, stop):
+    """ZIP da operação: relatório visual, CSVs úteis e logs de voo originais."""
+    from . import report
+    directory = store.directory / "exports"
+    directory.mkdir(exist_ok=True)
+    target, temporary = directory / (identifier + ".zip"), directory / (identifier + ".partial")
+    def check():
+        if stop.is_set():
+            raise ValueError("Exportação interrompida")
+    work = {"total": 1, "done": 0, "text": "Preparando exportação"}
+    def advance(count=0, text=None):
+        work["done"] += count
+        work["text"] = text or work["text"]
+        progress(work["text"], min(99, 100 * work["done"] / work["total"]))
+    try:
+        with store.snapshot() as snap, zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1, allowZip64=True) as archive:
+            operation = next((op for op in snap.operations() if op["id"] == context["operation"]), None)
+            if operation is None:
+                raise ValueError("Operação não encontrada")
+            sizes = [f["size"] or 0 for f in snap.files() if f["operation_id"] == operation["id"] and f["kind"] != "live"]
+            work["total"] = max(1, 1000 + (sum(sizes) // 200 if context["include_originals"] else 0))
+            root = "Bravo-Viewer/"
+            result = report.build(snap, operation, archive, root, report_zone(context["timezone"]), chart_svg, write_csv, utc, check, context["include_originals"], advance)
+            archive.writestr(root + "manifest.json", dumps({"application": "Bravo Viewer", "version": __version__, "generated_at_utc": utc(time.time()), "selection": context, **result}) + "\n")
+        temporary.replace(target)
+        for old in sorted(directory.glob("*.zip"), key=lambda p: p.stat().st_mtime, reverse=True)[5:]:
+            try: old.unlink()
+            except OSError: pass
+        return {"id": identifier, "size": target.stat().st_size, "download": "api/bundle?id=" + identifier, **result}
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
 def build_bundle(store, identifier, context, progress=lambda text, percent=None: None, stop=None):
     context = validate_context(context)
     if not re.fullmatch(r"[a-f0-9]{32}", identifier):
         raise ValueError("Identificador de exportação inválido")
+    if context["scope"] == "operation":
+        return operation_bundle(store, identifier, context, progress, stop or threading.Event())
     directory = store.directory / "exports"
     directory.mkdir(exist_ok=True)
     target = directory / (identifier + ".zip")

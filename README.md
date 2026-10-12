@@ -2,7 +2,7 @@
 
 <img src="catalog/card.png" alt="Bravo Viewer · BRS" width="320">
 
-Extensão BlueOS para consultar o histórico do ROV: horas, operações, energia, ocorrências, gráficos e inventário de tipos/campos. **Beta 0.6.2-beta.1**, desenvolvida para testes com BlueOS 1.4.6, ArduSub 4.7.1 e Navigator.
+Extensão BlueOS para consultar o histórico do ROV: horas, operações, energia, ocorrências, gráficos e inventário de tipos/campos. **Beta 0.7.0-beta.1**, desenvolvida para testes com BlueOS 1.4.6, ArduSub 4.7.1 e Navigator.
 
 ## Instalação
 
@@ -15,16 +15,16 @@ No gerenciador de **Extensões do BlueOS**, abra as configurações de fontes/re
 https://raw.githubusercontent.com/Reikjv/Bravo-Viewer/main/manifest.json
 ```
 
-Ative a fonte, procure **Bravo Viewer** e selecione a versão **0.6.2-beta.1**. Habilite versões de desenvolvimento/beta se necessário. O BlueOS escolhe ARM64 ou ARMv7 e baixa `ghcr.io/reikjv/bravo-viewer:0.6.2-beta.1`. É preciso acesso à internet durante o download; o painel funciona localmente após a instalação.
+Ative a fonte, procure **Bravo Viewer** e selecione a versão **0.7.0-beta.1**. Habilite versões de desenvolvimento/beta se necessário. O BlueOS escolhe ARM64 ou ARMv7 e baixa `ghcr.io/reikjv/bravo-viewer:0.7.0-beta.1`. É preciso acesso à internet durante o download; o painel funciona localmente após a instalação.
 
 O catálogo usa o suporte a fontes externas do BlueOS. A extensão não foi incluída no catálogo oficial. Consulte a [documentação do BlueOS](https://blueos.cloud/docs/stable/development/extensions/).
 
 ## Instaladores offline
 
-Baixe nas [releases](https://github.com/Reikjv/Bravo-Viewer/releases/tag/v0.6.2-beta.1):
+Baixe nas [releases](https://github.com/Reikjv/Bravo-Viewer/releases/tag/v0.7.0-beta.1):
 
-- [ARM64](https://github.com/Reikjv/Bravo-Viewer/releases/download/v0.6.2-beta.1/Bravo-Viewer-v0.6.2-beta.1-arm64.zip)
-- [ARMv7](https://github.com/Reikjv/Bravo-Viewer/releases/download/v0.6.2-beta.1/Bravo-Viewer-v0.6.2-beta.1-armv7.zip)
+- [ARM64](https://github.com/Reikjv/Bravo-Viewer/releases/download/v0.7.0-beta.1/Bravo-Viewer-v0.7.0-beta.1-arm64.zip)
+- [ARMv7](https://github.com/Reikjv/Bravo-Viewer/releases/download/v0.7.0-beta.1/Bravo-Viewer-v0.7.0-beta.1-armv7.zip)
 
 Confira o checksum `.zip.sha256`. Extraia o pacote no BlueOS e execute `bash install.sh` na pasta extraída. O instalador confere arquitetura e hashes, carrega a imagem incluída e preserva o volume em atualizações. A arquitetura relevante é a do **servidor Docker**, consultável com `docker version --format '{{.Server.Arch}}'`.
 
@@ -60,6 +60,12 @@ Um ROV gera cerca de 20 MB de `.tlog` e 470 mil mensagens por hora ligado. Guard
 O `.tlog` original continua sendo a fonte completa: o inventário de dados e as tabelas CSV/JSONL releem o log sob demanda, decodificando apenas o tipo pedido. Nos logs de bancada, o banco passou de 234 MB para 0,46 MB e a leitura ficou cerca de 7 vezes mais rápida. A leitura do log acontece fora da trava de escrita, sem pausar a coleta ao vivo, que também passa a guardar só séries, ocorrências e resumo. Na atualização, o histórico anterior é convertido automaticamente uma única vez.
 
 Logs de operações **encerradas** que o Bravo Viewer Desktop já copiou e conferiu (SHA-256) são liberados no ROV; resumos e gráficos permanecem. A Configuração mostra o espaço livre, e um aviso aparece abaixo de 15%.
+
+## Relatório da operação
+
+O ZIP de cada operação traz um `relatorio.html` visual, sem listas de mensagens: duração, tempo armado total e médio por mergulho, maior mergulho, profundidade máxima e média, consumo, **picos com horário** (corrente máxima, tensão mínima e máxima), a tabela de mergulhos, gráficos de tensão, corrente e profundidade (com as pausas sem dados marcadas) e os erros e avisos agrupados (ex.: `MYGCS: heartbeat lost · 395×`). Acompanham `mergulhos.csv`, `ocorrencias.csv`, `graficos/*.csv` e os logs de voo originais em `logs/`.
+
+O histórico considera só os logs de voo (`.tlog`/`.bin`). Os logs internos dos serviços do BlueOS (rede, câmera, ping…) ficam no BlueOS e não entram em listas, relatórios nem sincronização.
 
 ## Logs lidos direto do BlueOS
 

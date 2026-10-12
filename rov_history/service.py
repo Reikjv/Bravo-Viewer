@@ -17,6 +17,7 @@ from .store import Store, blueos_path
 
 
 SETTLE_SECONDS = 600
+FLIGHT_LOGS = (".tlog", ".bin")
 
 
 def active_files(items, now=None):
@@ -76,6 +77,7 @@ class Service:
             if not mirror:
                 # Passa a usar os logs na pasta do BlueOS e remove cópias duplicadas.
                 self.submit("adopt")
+            self.store.drop_service_logs()
 
     def configure(self, updates):
         allowed = {}
@@ -210,7 +212,8 @@ class Service:
         for item in inventory["files"]:
             key = f"blueos:{host}:{item['path']}"
             marker = [item["size"], item["modified"]]
-            if not item["size"] or item.get("extension", "").lower() not in (".bin", ".tlog", ".log", ".gz") or index.get(key) == marker:
+            # Só logs de voo do ROV; os logs internos dos serviços do BlueOS não interessam ao histórico.
+            if not item["size"] or item.get("extension", "").lower() not in FLIGHT_LOGS or index.get(key) == marker:
                 skipped += 1
                 continue
             if item["path"] in active:

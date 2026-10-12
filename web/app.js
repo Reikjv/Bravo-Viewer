@@ -8,11 +8,11 @@ const titles = {
   fleet: ["Frota", "ROVs encontrados na rede e sincronizados neste PC."],
   overview: ["Visão geral", "Horas, operações, energia e ocorrências do equipamento."],
   operations: ["Operações", "Operação atual, encerramento com ZIP e histórico das operações anteriores."],
-  sessions: ["Sessões", "Histórico por arquivo ou coleta, períodos armados e observações."],
+  sessions: ["Sessões", "Logs de cada operação, com tempo armado, mergulhos e profundidade."],
   explorer: ["Inventário de dados", "Todos os tipos e campos disponíveis nos registros preservados."],
   charts: ["Energia e gráficos", "Tensão, corrente, consumo, energia, profundidade e estado armado por sessão."],
   events: ["Ocorrências", "Alertas, eventos e mensagens de diagnóstico em contexto."],
-  files: ["Arquivos e exportação", "Importação, originais preservados e inventário dos arquivos BlueOS."],
+  files: ["Arquivos e exportação", "Logs de voo de cada operação, prontos para baixar."],
   capabilities: ["Dados e possibilidades", "Recursos desta versão, dados identificados e possibilidades futuras."],
   settings: ["Configuração", "Identificação do equipamento e coleta automática."],
 };
@@ -172,15 +172,35 @@ function progressBar(id, percent) {
   $(id).hidden = typeof percent !== "number";
   $(id).firstElementChild.style.setProperty("--p", (percent || 0) / 100);
 }
+const dives = file => (file.summary.armed_periods || []).length + (file.summary.active_armed_period ? 1 : 0);
+const kindLabel = file => file.kind === "live" ? "Coleta ao vivo" : file.kind === "tlog" ? "Telemetria (.tlog)" : file.kind === "bin" ? "Autopiloto (.bin)" : "Log importado";
 function sessionRows(list) {
-  return list.map(file => [
-    `<strong>${escape(file.name)}</strong><small>${escape(file.kind.toUpperCase())} · ${escape(operationName(file.operation_id))}</small>`,
-    fmt(file.summary.records || 0, 0),
-    duration(file.summary.observed_seconds),
-    duration(file.summary.armed_seconds),
-    file.summary.clock_issues?.length ? `<span class="severity warning">${plural(file.summary.clock_issues.length, "descontinuidade", "descontinuidades")}</span>` : '<span class="severity ok">Sem saltos de relógio</span>',
-    `<button class="secondary" data-session="${file.id}">Detalhes →</button>`,
-  ]);
+  return list.map(file => {
+    const depth = file.summary.depth || {};
+    return [
+      `<strong>${escape(file.name)}</strong><small>${escape(kindLabel(file))}</small>`,
+      file.first_ts ? `${escape(date(file.first_ts))}<small>até ${escape(date(file.last_ts))}</small>` : '<span class="muted">Sem horário</span>',
+      duration(file.summary.observed_seconds),
+      duration(file.summary.armed_seconds),
+      fmt(dives(file), 0),
+      depth.external && typeof depth.max === "number" ? meters(depth.max) : '<span class="muted">Sem sensor</span>',
+      `<button class="secondary" data-session="${file.id}">Detalhes →</button>`,
+    ];
+  });
+}
+function sessionOperation() {
+  const value = $("session-op").value;
+  return value === "" ? null : Number(value);
+}
+function renderSessions() {
+  const op = sessionOperation();
+  const list = files.filter(file => op === null ? file.operation_id == null : file.operation_id === op).sort((a, b) => (a.first_ts || 0) - (b.first_ts || 0));
+  $("sessions-table").innerHTML = table(["Log", "Período", "Tempo ligado", "Tempo armado", "Mergulhos", "Prof. máxima", ""], sessionRows(list), "Nenhum log nesta operação ainda.");
+  const summary = operationsData?.operations.find(item => item.id === op)?.summary || {};
+  const totalDives = list.filter(file => file.kind !== "live").reduce((sum, file) => sum + dives(file), 0);
+  $("session-totals").innerHTML = [["Logs", fmt(list.length, 0)], ["Tempo armado", duration(summary.armed_seconds || 0)], ["Mergulhos", fmt(totalDives, 0)]].map(([label, value]) => `<div><small>${label}</small><strong>${value}</strong></div>`).join("");
+  options("session-select", list.map(file => ({value: file.id, label: file.name})));
+  renderSession();
 }
 function renderOverview(data) {
   const stat = data.statistics;
@@ -207,19 +227,22 @@ function renderOverview(data) {
   setValue("consumption", consumed ? `${fmt(consumed.last, 3)} ${consumed.unit}` : "—");
   setValue("energy", energy ? `${fmt(energy.last, 3)} ${energy.unit}` : "—");
   $("energy-source").textContent = latest ? `Fonte: ${latest.name}` : "Importe um log para consultar a alimentação.";
-  $("recent-sessions").innerHTML = table(["Sessão / fonte", "Registros", "Tempo observado", "Tempo armado", "Continuidade", ""], sessionRows(files.slice(0, 5)));
-  $("sessions-table").innerHTML = table(["Sessão / fonte", "Registros", "Tempo observado", "Tempo armado", "Continuidade", ""], sessionRows(files));
+  $("recent-sessions").innerHTML = table(["Log", "Período", "Tempo ligado", "Tempo armado", "Mergulhos", "Prof. máxima", ""], sessionRows(files.filter(file => file.kind !== "live").slice(0, 5)), "Nenhum log de voo ainda.");
   $("empty-state").hidden = files.length > 0;
-  $("files-size").textContent = `${plural(files.length, "fonte", "fontes")} · ${bytes(data.bytes)} de originais preservados`;
+  const flight = files.filter(file => file.kind !== "live");
+  $("files-size").textContent = `${plural(flight.length, "log de voo", "logs de voo")} · ${bytes(flight.reduce((sum, file) => sum + (file.size || 0), 0))}`;
 }
 function renderFiles() {
   const search = $("files-search").value.toLowerCase();
-  const rows = files.filter(file => `${file.name} ${file.source_key}`.toLowerCase().includes(search)).map(file => [
-    `<div class="file-name"><strong>${escape(file.name)}</strong><small>${escape(file.source_key.startsWith("blueos:") ? file.source_key.slice(file.source_key.indexOf(":", 7) + 1) : file.kind === "live" ? "Coleta amostrada" : "Importação local")}</small></div>`,
-    escape(file.kind.toUpperCase()), bytes(file.size || 0), fmt(file.summary.records || 0, 0), fmt(file.stream_count, 0), date(file.imported_at),
-    file.kind === "live" ? '<span class="muted">Exportar pelo inventário</span>' : `<a class="button secondary" href="${escape(endpoint(`api/original?file=${file.id}`))}">↓ Original</a>`,
+  const logs = files.filter(file => file.kind !== "live").sort((a, b) => (b.first_ts || 0) - (a.first_ts || 0));
+  const rows = logs.filter(file => `${file.name} ${operationName(file.operation_id)}`.toLowerCase().includes(search)).map(file => [
+    `<div class="file-name"><strong>${escape(file.name)}</strong><small>${escape(kindLabel(file))}</small></div>`,
+    escape(operationName(file.operation_id)),
+    file.first_ts ? escape(date(file.first_ts)) : '<span class="muted">Sem horário</span>',
+    bytes(file.size || 0),
+    `<a class="button secondary" href="${escape(endpoint(`api/original?file=${file.id}`))}">↓ Baixar</a>`,
   ]);
-  $("files-table").innerHTML = table(["Arquivo", "Formato", "Tamanho", "Registros", "Tipos / origens", "Importado", "Download"], rows);
+  $("files-table").innerHTML = table(["Log", "Operação", "Início", "Tamanho", ""], rows, "Nenhum log de voo ainda.");
 }
 function renderSession() {
   const file = files.find(file => String(file.id) === $("session-select").value);
@@ -421,7 +444,26 @@ async function loadFleet() {
   const scan = fleetData.scan;
   $("scan-spinner").hidden = !scan.running;
   $("scan-text").textContent = scan.running ? "Procurando ROVs na rede…" : scan.last ? `Última busca às ${new Date(scan.last * 1000).toLocaleTimeString("pt-BR")} · ${plural(scan.found, "ROV encontrado", "ROVs encontrados")}` : "A busca na rede começa ao abrir o programa.";
-  $("fleet-cards").innerHTML = fleetData.devices.length ? fleetData.devices.map(fleetCard).join("") : '<div class="fleet-empty"><h2>Nenhum ROV ainda</h2><p>Conecte o PC ao cabo do ROV ou à rede da base. O programa encontra os ROVs com Bravo Viewer sozinho; se preferir, use Adicionar por IP.</p></div>';
+  const container = $("fleet-cards");
+  if (!fleetData.devices.length) {
+    if (!container.querySelector(".fleet-empty")) container.innerHTML = '<div class="fleet-empty"><h2>Nenhum ROV ainda</h2><p>Conecte o PC ao cabo do ROV ou à rede da base. O programa encontra os ROVs com Bravo Viewer sozinho; se preferir, use Adicionar por IP.</p></div>';
+    return;
+  }
+  container.querySelector(".fleet-empty")?.remove();
+  // Atualiza só o cartão que mudou; a animação de entrada roda apenas para um ROV novo.
+  const ids = fleetData.devices.map(device => device.id);
+  [...container.children].forEach(card => { if (!ids.includes(card.dataset.device)) card.remove(); });
+  fleetData.devices.forEach((device, index) => {
+    const html = fleetCard(device);
+    let card = container.querySelector(`[data-device="${device.id}"]`);
+    if (card?.dataset.html === html) return;
+    const fresh = document.createElement("div");
+    fresh.innerHTML = html;
+    const next = fresh.firstElementChild;
+    next.dataset.device = device.id; next.dataset.html = html;
+    if (!card) next.classList.add("enter");
+    card ? card.replaceWith(next) : container.insertBefore(next, container.children[index] || null);
+  });
 }
 function renderFleet(data) {
   if (data.mode !== "desktop") return;
@@ -511,7 +553,10 @@ async function refresh() {
     const fileOptions = files.map(file => ({value: file.id, label: file.name}));
     ["explorer-file", "event-file"].forEach(id => options(id, fileOptions, true));
     options("chart-file", fileOptions);
-    options("session-select", fileOptions);
+    const opOptions = (operationsData?.operations || []).map(op => ({value: op.id, label: op.status === "open" ? `${op.name} (atual)` : op.name}));
+    if (files.some(file => file.operation_id == null)) opOptions.push({value: "", label: "Sem operação"});
+    options("session-op", opOptions);
+    renderSessions();
     const groups = [...new Set(streams.map(stream => stream.category))].sort();
     const groupSelect = $("explorer-group"), prev = groupSelect.value;
     groupSelect.replaceChildren(new Option("Todos os grupos", ""));
@@ -553,7 +598,12 @@ document.addEventListener("click", task(async event => {
 }));
 document.addEventListener("click", event => {
   const button = event.target.closest("[data-session]");
-  if (button) { $("session-select").value = button.dataset.session; renderSession(); go("sessions"); }
+  if (button) {
+    const file = files.find(item => String(item.id) === button.dataset.session);
+    $("session-op").value = file?.operation_id == null ? "" : String(file.operation_id);
+    renderSessions();
+    $("session-select").value = button.dataset.session; renderSession(); go("sessions");
+  }
 });
 $("refresh").onclick = task(refresh);
 $("notice").onclick = () => { $("notice").hidden = true; };
@@ -562,6 +612,7 @@ $("plot").onpointerleave = () => $("chart-box").classList.remove("hover");
 $("files-search").oninput = renderFiles;
 $("field-search").oninput = () => { focusedField = null; renderRecords(); };
 $("session-select").onchange = renderSession;
+$("session-op").onchange = renderSessions;
 $("save-note").onclick = task(async () => { await post("note", {file: Number($("session-select").value), note: $("session-note").value}); notice("Observação salva."); files.find(file => String(file.id) === $("session-select").value).note = $("session-note").value; });
 $("explorer-file").onchange = $("explorer-group").onchange = task(() => loadExplorer());
 $("explorer-stream").onchange = task(async () => { recordOffset = 0; focusedField = null; await loadRecords(); });
@@ -586,7 +637,6 @@ $("config-form").onsubmit = task(async event => {
   notice("Configuração salva. A coleta segue o estado escolhido."); await loadStatus();
 });
 $("config-form").oninput = () => { configDirty = true; };
-$("export-summary").href = endpoint("api/export-summary");
 const opValues = () => ({name: $("op-name").value, location: $("op-location").value, client: $("op-client").value, notes: $("op-notes").value});
 $("op-form").oninput = () => { opDirty = true; };
 $("op-form").onsubmit = task(async event => {

@@ -96,13 +96,18 @@ class OperationTests(HistoryFixture):
         build_bundle(self.store, "e" * 32, {"scope": "operation", "operation": target["id"], "include_data": False, "include_originals": True}, lambda text, percent=None: steps.append(percent))
         with zipfile.ZipFile(self.root / "db" / "exports" / ("e" * 32 + ".zip")) as z:
             names = z.namelist()
-            operation = json.loads(z.read("Bravo-Viewer/resumo/operacao.json"))
+            operation = json.loads(z.read("Bravo-Viewer/operacao.json"))
             report = z.read("Bravo-Viewer/relatorio.html").decode()
+            dives = z.read("Bravo-Viewer/mergulhos.csv").decode("utf-8-sig").splitlines()
         self.assertEqual("Casco", operation["name"])
         self.assertNotEqual(ids["closed"], operation["id"])
-        self.assertIn("Profundidade máxima", report)
-        self.assertEqual(1, sum(name.startswith("Bravo-Viewer/originais/") for name in names))
-        self.assertFalse(any(name.startswith("Bravo-Viewer/dados/") for name in names))
+        # Relatório visual: indicadores, picos e mergulhos; sem listas de mensagens.
+        for text in ("Tempo armado médio", "Profundidade máxima", "4,00 m", "Mergulhos", "Erros e avisos"):
+            self.assertIn(text, report)
+        self.assertNotIn("Inventário", report)
+        self.assertEqual(2, len(dives))
+        self.assertEqual(["Bravo-Viewer/logs/dive.tlog"], [name for name in names if name.startswith("Bravo-Viewer/logs/")])
+        self.assertFalse(any(name.startswith(("Bravo-Viewer/dados/", "Bravo-Viewer/inventario/")) for name in names))
         self.assertTrue(all(p is None or 0 <= p <= 99 for p in steps))
         self.assertTrue(any(p for p in steps))
 
