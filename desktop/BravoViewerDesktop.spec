@@ -14,5 +14,5 @@ analysis = Analysis(
 )
 pyz = PYZ(analysis.pure)
 exe = EXE(pyz, analysis.scripts, [], exclude_binaries=True, name="BravoViewerDesktop",
-          console=False, icon=str(root / "catalog" / "reikjv.ico"))
+          console=False, icon=str(root / "catalog" / "bravo.ico"))
 COLLECT(exe, analysis.binaries, analysis.datas, name="BravoViewerDesktop")

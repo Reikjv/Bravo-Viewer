@@ -2,7 +2,7 @@
 
 <img src="catalog/card.png" alt="Bravo Viewer · BRS" width="320">
 
-Extensão BlueOS para consultar o histórico do ROV: horas, operações, energia, ocorrências, gráficos e inventário de tipos/campos. **Beta 0.4.1-beta.1**, desenvolvida para testes com BlueOS 1.4.6, ArduSub 4.7.1 e Navigator.
+Extensão BlueOS para consultar o histórico do ROV: horas, operações, energia, ocorrências, gráficos e inventário de tipos/campos. **Beta 0.4.2-beta.1**, desenvolvida para testes com BlueOS 1.4.6, ArduSub 4.7.1 e Navigator.
 
 ## Instalação
 
@@ -15,16 +15,16 @@ No gerenciador de **Extensões do BlueOS**, abra as configurações de fontes/re
 https://raw.githubusercontent.com/Reikjv/Bravo-Viewer/main/manifest.json
 ```
 
-Ative a fonte, procure **Bravo Viewer** e selecione a versão **0.4.1-beta.1**. Habilite versões de desenvolvimento/beta se necessário. O BlueOS escolhe ARM64 ou ARMv7 e baixa `ghcr.io/reikjv/bravo-viewer:0.4.1-beta.1`. É preciso acesso à internet durante o download; o painel funciona localmente após a instalação.
+Ative a fonte, procure **Bravo Viewer** e selecione a versão **0.4.2-beta.1**. Habilite versões de desenvolvimento/beta se necessário. O BlueOS escolhe ARM64 ou ARMv7 e baixa `ghcr.io/reikjv/bravo-viewer:0.4.2-beta.1`. É preciso acesso à internet durante o download; o painel funciona localmente após a instalação.
 
 O catálogo usa o suporte a fontes externas do BlueOS. A extensão não foi incluída no catálogo oficial. Consulte a [documentação do BlueOS](https://blueos.cloud/docs/stable/development/extensions/).
 
 ## Instaladores offline
 
-Baixe nas [releases](https://github.com/Reikjv/Bravo-Viewer/releases/tag/v0.4.1-beta.1):
+Baixe nas [releases](https://github.com/Reikjv/Bravo-Viewer/releases/tag/v0.4.2-beta.1):
 
-- [ARM64](https://github.com/Reikjv/Bravo-Viewer/releases/download/v0.4.1-beta.1/Bravo-Viewer-v0.4.1-beta.1-arm64.zip)
-- [ARMv7](https://github.com/Reikjv/Bravo-Viewer/releases/download/v0.4.1-beta.1/Bravo-Viewer-v0.4.1-beta.1-armv7.zip)
+- [ARM64](https://github.com/Reikjv/Bravo-Viewer/releases/download/v0.4.2-beta.1/Bravo-Viewer-v0.4.2-beta.1-arm64.zip)
+- [ARMv7](https://github.com/Reikjv/Bravo-Viewer/releases/download/v0.4.2-beta.1/Bravo-Viewer-v0.4.2-beta.1-armv7.zip)
 
 Confira o checksum `.zip.sha256`. Extraia o pacote no BlueOS e execute `bash install.sh` na pasta extraída. O instalador confere arquitetura e hashes, carrega a imagem incluída e preserva o volume em atualizações. A arquitetura relevante é a do **servidor Docker**, consultável com `docker version --format '{{.Server.Arch}}'`.
 

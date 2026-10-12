@@ -177,7 +177,7 @@ def create_server(service, host="127.0.0.1", port=8090, extension=None):
             name = path.rsplit("/", 1)[-1]
             if name in ("", "index.html") or parsed.path.endswith("/"):
                 name = "index.html"
-            if name not in ("index.html", "app.js", "style.css", "brand.png", "brs.png"):
+            if name not in ("index.html", "app.js", "style.css", "brand.png", "brs.png", "favicon.png"):
                 return self.response({"error": "Arquivo não encontrado"}, 404)
             data = (WEB / name).read_bytes()
             self.send_response(200)
