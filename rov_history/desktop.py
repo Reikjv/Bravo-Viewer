@@ -231,13 +231,35 @@ def free_port():
         return probe.getsockname()[1]
 
 
+def native_window(url, profile):
+    """Janela própria do Windows (WebView2); bloqueia até o usuário fechar."""
+    import webview
+    webview.settings["ALLOW_DOWNLOADS"] = True
+    webview.create_window("Bravo Viewer", url, width=1440, height=920, min_size=(1000, 640), background_color="#071219")
+    webview.start(storage_path=str(profile), private_mode=False)
+
+
 def open_window(url, profile):
+    """Reserva quando o WebView2 não está disponível: janela de aplicativo do Edge."""
     edge = find_edge()
     if not edge:
         webbrowser.open(url)
         return None
     # Perfil próprio: a janela é independente do navegador do usuário e mantém o processo vivo.
     return subprocess.Popen([str(edge), f"--app={url}", f"--user-data-dir={profile}", "--no-first-run", "--window-size=1440,920"])
+
+
+def show(url, profile):
+    try:
+        native_window(url, profile)
+    except Exception:
+        logging.exception("Janela nativa indisponível; usando o Edge")
+        window = open_window(url, profile)
+        if window:
+            window.wait()
+        else:
+            while True:
+                time.sleep(3600)
 
 
 def main():
@@ -252,7 +274,7 @@ def main():
     lock_path = directory / "instancia.txt"
     port = running_instance(lock_path)
     if port and not args.no_window:
-        open_window(f"http://127.0.0.1:{port}/", directory / "janela")
+        show(f"http://127.0.0.1:{port}/", directory / "janela")
         return
     fleet = Fleet(directory)
     port = args.port or free_port()
@@ -261,13 +283,12 @@ def main():
     threading.Thread(target=server.serve_forever, daemon=True).start()
     threading.Thread(target=fleet.loop, daemon=True).start()
     logging.info("Bravo Viewer Desktop %s em http://127.0.0.1:%s", __version__, port)
-    window = None if args.no_window else open_window(f"http://127.0.0.1:{port}/", directory / "janela")
     try:
-        if window:
-            window.wait()
-        else:
+        if args.no_window:
             while True:
                 time.sleep(3600)
+        else:
+            show(f"http://127.0.0.1:{port}/", directory / "janela")
     except KeyboardInterrupt:
         pass
     finally:

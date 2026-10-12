@@ -85,14 +85,14 @@ function options(id, items, all = false) {
   items.forEach(item => select.add(new Option(item.label, item.value)));
   if ([...select.options].some(option => option.value === previous)) select.value = previous;
 }
-function go(tab) {
+function go(tab, push = true) {
   if (!titles[tab]) return;
   const changed = active !== tab;
   active = tab;
   document.querySelectorAll(".page").forEach(page => page.hidden = page.id !== tab);
   document.querySelectorAll("nav button").forEach(button => button.classList.toggle("active", button.dataset.tab === tab));
   $("page-title").textContent = titles[tab][0]; $("page-description").textContent = titles[tab][1];
-  if (location.hash.slice(1) !== tab) history.pushState(null, "", "#" + tab);
+  if (push && location.hash.slice(1) !== tab) history.pushState(null, "", "#" + tab);
   document.documentElement.scrollTop = 0;
   if (tab === "charts") requestAnimationFrame(drawChart);
   if (initialized && (changed || !loadedTabs.has(tab))) task(loadActivePage)();
@@ -588,6 +588,8 @@ $("export-form").onsubmit = task(async event => {
 });
 window.addEventListener("resize", () => { cancelAnimationFrame(resizeFrame); resizeFrame = requestAnimationFrame(drawChart); });
 window.addEventListener("hashchange", () => go(location.hash.slice(1)));
-go(titles[location.hash.slice(1)] ? location.hash.slice(1) : "overview");
+go(titles[location.hash.slice(1)] ? location.hash.slice(1) : "overview", false);
+// Ao terminar de carregar, o navegador rola até a âncora da URL (#aba); a tela deve abrir no topo.
+addEventListener("load", () => { document.documentElement.scrollTop = 0; });
 task(async () => { await loadStatus(); await refresh(); })();
 setInterval(task(loadStatus), 3000);

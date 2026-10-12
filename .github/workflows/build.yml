@@ -94,21 +94,28 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.12'
-      - name: Build, smoke test and package Windows app
+      - name: Build, install silently and smoke test Windows app
         shell: pwsh
         run: |
-          pip install -r requirements.txt pyinstaller==6.16.0
+          pip install -r requirements.txt -r requirements-desktop.txt
           python -m PyInstaller --noconfirm --clean desktop/BravoViewerDesktop.spec
           $version = python -c "from rov_history import __version__; print(__version__)"
-          $app = Start-Process dist/BravoViewerDesktop/BravoViewerDesktop.exe -ArgumentList '--no-window','--port','18300','--data-dir',"$env:RUNNER_TEMP\bravo" -PassThru
+          $numeric = ($version -split '-')[0] + '.0'
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress; }
+          & $iscc "/DAppVersion=$version" "/DAppNumeric=$numeric" desktop/installer.iss
+          if ($LASTEXITCODE) { throw 'Installer build failed' }
+          $setup = "artifacts/desktop/Bravo-Viewer-Desktop-v$version-Setup.exe"
+          $target = "$env:RUNNER_TEMP\BravoViewer"
+          Start-Process $setup -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=$target" -Wait
+          $app = Start-Process "$target\BravoViewerDesktop.exe" -ArgumentList '--no-window','--port','18300','--data-dir',"$env:RUNNER_TEMP\bravo-data" -PassThru
           $ok = $false
           foreach ($attempt in 1..40) {
             try { $status = Invoke-RestMethod http://127.0.0.1:18300/api/status; if ($status.mode -eq 'desktop' -and $status.version -eq $version) { $ok = $true; break } } catch { Start-Sleep 1 }
           }
           Stop-Process -Id $app.Id -Force
-          if (-not $ok) { throw 'Desktop app did not start' }
-          New-Item -ItemType Directory -Force artifacts/desktop | Out-Null
-          Compress-Archive -Path dist/BravoViewerDesktop -DestinationPath "artifacts/desktop/Bravo-Viewer-Desktop-v$version-windows.zip"
+          if (-not $ok) { throw 'Installed desktop app did not start' }
+          Compress-Archive -Path dist/BravoViewerDesktop -DestinationPath "artifacts/desktop/Bravo-Viewer-Desktop-v$version-portable.zip"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: Bravo-Viewer-Desktop

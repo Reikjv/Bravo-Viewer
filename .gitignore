@@ -9,3 +9,4 @@ architecture.txt
 SHA256SUMS
 build/
 dist/
+.venv*/
