@@ -9,7 +9,7 @@ const titles = {
   operations: ["Operações", "Operação atual, encerramento com ZIP e histórico das operações anteriores."],
   sessions: ["Sessões", "Histórico por arquivo ou coleta, períodos armados e observações."],
   explorer: ["Inventário de dados", "Todos os tipos e campos disponíveis nos registros preservados."],
-  charts: ["Energia e gráficos", "Tensão, corrente, consumo, energia e estado armado por origem."],
+  charts: ["Energia e gráficos", "Tensão, corrente, consumo, energia, profundidade e estado armado por sessão."],
   events: ["Ocorrências", "Alertas, eventos e mensagens de diagnóstico em contexto."],
   files: ["Arquivos e exportação", "Importação, originais preservados e inventário dos arquivos BlueOS."],
   capabilities: ["Dados e possibilidades", "Recursos desta versão, dados identificados e possibilidades futuras."],
@@ -21,16 +21,10 @@ let completedJobs = new Set(), refreshing = false, chartRequest = 0;
 let configDirty = false;
 let initialized = false;
 let exportJob = null, closeJob = null, operationsData = null, opDirty = false;
-let desktopDevice, desktopSync;
+let desktopDevice, desktopSync, diskWarned = false;
 const opExportJobs = new Set();
 let chartAbort = null;
 const loadedTabs = new Set(), loadingTabs = new Set();
-const chartIndicators = {
-  SYS_STATUS: {voltage_battery: "Tensão da alimentação", current_battery: "Corrente total"},
-  BATTERY_STATUS: {current_consumed: "Consumo acumulado", energy_consumed: "Energia acumulada"},
-  BAT: {Volt: "Tensão da alimentação", Curr: "Corrente total", CurrTot: "Consumo acumulado", EnrgTot: "Energia acumulada"},
-  HEARTBEAT: {_armed: "Estado armado (0 / 1)"},
-};
 const fmt = (value, digits = 2) => typeof value === "number" && Number.isFinite(value) ? value.toLocaleString("pt-BR", {maximumFractionDigits: digits}) : "—";
 const escape = value => String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const bytes = value => value >= 1073741824 ? fmt(value / 1073741824) + " GB" : value >= 1048576 ? fmt(value / 1048576) + " MB" : fmt(value / 1024) + " KB";
@@ -104,7 +98,7 @@ async function loadActivePage() {
   try {
     if (tab === "operations") await loadOperations();
     else if (tab === "explorer") await loadExplorer();
-    else if (tab === "charts") await loadChartStreams();
+    else if (tab === "charts") await loadChartMetrics();
     else if (tab === "events") await loadEvents();
     else if (tab === "files") await loadInventory();
     else if (tab === "capabilities") await loadCapabilities();
@@ -193,7 +187,12 @@ function renderOverview(data) {
   setValue("record-count", fmt(data.records, 0));
   $("record-detail").textContent = `${plural(data.files, "fonte", "fontes")} · ${bytes(data.bytes)} de originais`;
   $("clock-quality").textContent = data.clock_issues ? plural(data.clock_issues, "descontinuidade", "descontinuidades") : "Sem saltos identificados";
-  $("database-size").textContent = `Base de dados: ${bytes(data.database_bytes)} · Originais: ${bytes(data.bytes)}. Crescimento depende da taxa e dos tipos registrados.`;
+  const freeShare = data.disk_total ? data.disk_free / data.disk_total : 1;
+  $("database-size").textContent = `Base de dados: ${bytes(data.database_bytes)} · Logs originais: ${bytes(data.bytes)} · Espaço livre: ${bytes(data.disk_free || 0)} de ${bytes(data.disk_total || 0)} (${fmt(freeShare * 100, 0)}%).`;
+  if (freeShare < .15 && !diskWarned && !document.body.classList.contains("desktop")) {
+    diskWarned = true;
+    notice(`Pouco espaço livre no ROV: ${bytes(data.disk_free)} (${fmt(freeShare * 100, 0)}%). Sincronize com o Bravo Viewer Desktop e encerre as operações concluídas para liberar os logs já copiados.`, true);
+  }
   const latest = files.find(file => file.summary.metrics && Object.keys(file.summary.metrics).some(key => key.includes("voltage_battery") || key === "BAT.Volt"));
   const metrics = latest?.summary.metrics || {};
   const voltage = metrics["SYS_STATUS.voltage_battery"] || metrics["BAT.Volt"];
@@ -268,34 +267,30 @@ function renderRecords() {
     const values = flatten(row.data);
     return [fmt(row.seq, 0), date(row.ts), String(row.segment), ...fields.map(field => escape(typeof values[field] === "number" ? fmt(values[field], 6) : values[field] === null ? "Indisponível" : values[field] ?? "—"))];
   });
-  $("records-table").innerHTML = table(["Registro", "Data", "Trecho", ...fields], rows);
+  const file = files.find(item => item.id === recordData.stream.file_id);
+  const missing = file?.kind === "live" ? "A coleta ao vivo guarda resumo, ocorrências e gráficos; as mensagens completas ficam no log .tlog da sessão." : document.body.classList.contains("desktop") ? "O log completo desta sessão ainda está sendo copiado do ROV." : "O log completo desta sessão já foi transferido para o Bravo Viewer Desktop.";
+  $("records-table").innerHTML = table(["Registro", "Data", "Trecho", ...fields], rows, recordData.available ? "Nenhum registro nesta página." : missing);
 }
-async function loadChartStreams() {
-  const items = streamsFor($("chart-file").value).filter(stream => chartIndicators[stream.type] && (stream.origin === "1:1" || stream.kind === "bin"));
-  const order = {SYS_STATUS: 0, BAT: 1, BATTERY_STATUS: 2, HEARTBEAT: 3};
-  items.sort((a, b) => order[a.type] - order[b.type]);
-  options("chart-stream", items.map(stream => ({value: stream.id, label: `${stream.type} · ${stream.origin} · ${stream.file_name}`})));
-  await loadChartFields();
-}
-async function loadChartFields() {
-  const stream = streams.find(stream => String(stream.id) === $("chart-stream").value);
-  const indicators = chartIndicators[stream?.type] || {};
-  options("chart-field", Object.entries(indicators).filter(([field]) => field === "_armed" || stream.fields.includes(field)).map(([field, label]) => ({value: field, label})));
+async function loadChartMetrics() {
+  const file = $("chart-file").value;
+  const metrics = file ? await api(`metrics?file=${file}`) : [];
+  options("chart-field", metrics.map(metric => ({value: metric.metric, label: metric.label})));
   await loadChart();
 }
 async function loadChart() {
   chartAbort?.abort(); chartAbort = new AbortController();
   const request = ++chartRequest;
-  const stream = $("chart-stream").value, field = $("chart-field").value;
-  if (!stream || !field) { chartData = null; $("chart-title").textContent = "Nenhum indicador disponível nesta fonte"; $("chart-stats").replaceChildren(); $("chart-unit").textContent = ""; $("chart-info").textContent = "Importe logs com alimentação ou estado do autopiloto."; drawChart(); return; }
-  const data = await api(`series?stream=${stream}&field=${encodeURIComponent(field)}&normalized=${$("chart-normalized").value}`, {signal: chartAbort.signal});
+  const file = $("chart-file").value, metric = $("chart-field").value;
+  if (!file || !metric) { chartData = null; $("chart-title").textContent = "Nenhum indicador nesta sessão"; $("chart-stats").replaceChildren(); $("chart-unit").textContent = ""; $("chart-info").textContent = "Sessões com alimentação, estado do autopiloto ou profundidade (sensor externo) mostram indicadores aqui."; drawChart(); return; }
+  const data = await api(`series?file=${file}&metric=${encodeURIComponent(metric)}`, {signal: chartAbort.signal});
   if (request !== chartRequest) return;
   chartData = data;
-  $("chart-title").textContent = `${chartIndicators[data.type]?.[field] || field} · ${data.type}`;
+  const name = files.find(item => String(item.id) === file)?.name || "";
+  $("chart-title").textContent = `${data.label} · ${name}`;
   $("chart-unit").textContent = data.unit || "SEM UNIDADE DEFINIDA";
-  $("chart-info").textContent = `${plural(data.total, "registro", "registros")} · ${plural(data.points.length, "ponto", "pontos")} na visualização · ${plural(data.invalid_samples, "valor não numérico ou desconhecido", "valores não numéricos ou desconhecidos")}. Passe o cursor sobre o gráfico para consultar cada ponto.`;
-  const vals = data.points.filter(point => typeof point.value === "number").map(point => point.value);
-  $("chart-stats").innerHTML = vals.length ? `<div><small>Mínimo</small><strong>${fmt(Math.min(...vals), 4)} ${escape(data.unit)}</strong></div><div><small>Máximo</small><strong>${fmt(Math.max(...vals), 4)} ${escape(data.unit)}</strong></div><div><small>Último ponto exibido</small><strong>${fmt(vals.at(-1), 4)} ${escape(data.unit)}</strong></div>` : "";
+  $("chart-info").textContent = `${plural(data.points.length, "intervalo", "intervalos")} de ${data.seconds} s. A faixa mostra o mínimo e o máximo de cada intervalo; a linha, a média. Passe o cursor sobre o gráfico para consultar cada intervalo.`;
+  const points = data.points;
+  $("chart-stats").innerHTML = points.length ? `<div><small>Mínimo</small><strong>${fmt(Math.min(...points.map(p => p.min)), 4)} ${escape(data.unit)}</strong></div><div><small>Máximo</small><strong>${fmt(Math.max(...points.map(p => p.max)), 4)} ${escape(data.unit)}</strong></div><div><small>Média do último intervalo</small><strong>${fmt(points.at(-1).avg, 4)} ${escape(data.unit)}</strong></div>` : "";
   revealChart = true;
   drawChart();
 }
@@ -306,17 +301,16 @@ function drawChart() {
   canvas.width = Math.round(rect.width * ratio); canvas.height = Math.round(rect.height * ratio);
   const ctx = canvas.getContext("2d"); ctx.scale(ratio, ratio);
   const w = rect.width, h = rect.height, points = chartData?.points || [];
-  const valid = points.filter(point => typeof point.value === "number" && Number.isFinite(point.value));
-  $("chart-empty").hidden = valid.length > 0;
+  $("chart-empty").hidden = points.length > 0;
   $("chart-box").classList.remove("hover");
   plotted = [];
-  if (!valid.length) return;
+  if (!points.length) return;
   let lo = Infinity, hi = -Infinity;
-  valid.forEach(point => { lo = Math.min(lo, point.value); hi = Math.max(hi, point.value); });
+  points.forEach(point => { lo = Math.min(lo, point.min); hi = Math.max(hi, point.max); });
   const pad = Math.max((hi - lo) * .12, Math.abs(hi) * .002, .001); lo -= pad; hi += pad;
   const left = 70, right = w - 22, top = 20, bottom = h - 46;
-  const minSeq = points[0].seq, maxSeq = points.at(-1).seq;
-  const x = seq => left + (seq - minSeq) / (maxSeq - minSeq || 1) * (right - left);
+  const first = points[0].t, last = points.at(-1).t;
+  const x = t => left + (t - first) / (last - first || 1) * (right - left);
   const y = value => top + (hi - value) / (hi - lo) * (bottom - top);
   ctx.font = '10.5px Inter,"Segoe UI",sans-serif';
   ctx.setLineDash([3, 5]); ctx.lineWidth = 1;
@@ -326,34 +320,35 @@ function drawChart() {
     ctx.fillStyle = "#7f99a6"; ctx.textAlign = "right"; ctx.fillText(fmt(hi - index * (hi - lo) / 4, 3), left - 12, lineY + 4);
   }
   ctx.setLineDash([]);
-  ctx.fillStyle = "#7f99a6"; ctx.textAlign = "left"; ctx.fillText(`#${fmt(minSeq, 0)} · ${date(points[0].timestamp)}`, left, h - 17);
-  ctx.textAlign = "right"; ctx.fillText(`#${fmt(maxSeq, 0)} · ${date(points.at(-1).timestamp)}`, right, h - 17);
-  const step = chartData.field === "_armed";
+  ctx.fillStyle = "#7f99a6"; ctx.textAlign = "left"; ctx.fillText(date(first), left, h - 17);
+  ctx.textAlign = "right"; ctx.fillText(date(last), right, h - 17);
+  // Lacunas maiores que três intervalos (ROV desligado, salto de relógio) interrompem a linha.
   const segments = [];
-  let current = null, previous = null;
-  points.forEach(point => {
-    if (typeof point.value !== "number" || !Number.isFinite(point.value)) { previous = null; return; }
-    if (!previous || previous.segment !== point.segment) { current = []; segments.push(current); }
-    const px = x(point.seq), py = y(point.value);
-    if (step && current.length) current.push([px, current.at(-1)[1]]);
-    current.push([px, py]);
-    plotted.push({...point, x: px, y: py}); previous = point;
+  points.forEach((point, index) => {
+    if (!index || point.t - points[index - 1].t > 3 * chartData.seconds) segments.push([]);
+    const item = {...point, x: x(point.t), y: y(point.avg), top: y(point.max), low: y(point.min)};
+    segments.at(-1).push(item); plotted.push(item);
   });
   const fill = ctx.createLinearGradient(0, top, 0, bottom);
-  fill.addColorStop(0, "rgba(95,180,192,.28)"); fill.addColorStop(1, "rgba(95,180,192,0)");
-  const stroke = ctx.createLinearGradient(left, 0, right, 0);
-  stroke.addColorStop(0, "#4fa3b1"); stroke.addColorStop(1, "#a6e1e9");
+  fill.addColorStop(0, "rgba(95,180,192,.34)"); fill.addColorStop(1, "rgba(95,180,192,.12)");
   ctx.fillStyle = fill;
   segments.forEach(segment => {
-    ctx.beginPath(); ctx.moveTo(segment[0][0], bottom);
-    segment.forEach(([px, py]) => ctx.lineTo(px, py));
-    ctx.lineTo(segment.at(-1)[0], bottom); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); segment.forEach((p, index) => index ? ctx.lineTo(p.x, p.top) : ctx.moveTo(p.x, p.top));
+    [...segment].reverse().forEach(p => ctx.lineTo(p.x, p.low)); ctx.closePath(); ctx.fill();
   });
+  const stroke = ctx.createLinearGradient(left, 0, right, 0);
+  stroke.addColorStop(0, "#4fa3b1"); stroke.addColorStop(1, "#a6e1e9");
   ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.strokeStyle = stroke;
+  const step = chartData.metric === "armed";
   segments.forEach(segment => {
-    ctx.beginPath(); segment.forEach(([px, py], index) => index ? ctx.lineTo(px, py) : ctx.moveTo(px, py));
+    ctx.beginPath();
+    segment.forEach((p, index) => {
+      if (!index) return ctx.moveTo(p.x, p.y);
+      if (step) ctx.lineTo(p.x, segment[index - 1].y);
+      ctx.lineTo(p.x, p.y);
+    });
     ctx.stroke();
-    if (segment.length === 1) { ctx.beginPath(); ctx.arc(segment[0][0], segment[0][1], 3.5, 0, Math.PI * 2); ctx.fillStyle = "#a6e1e9"; ctx.fill(); }
+    if (segment.length === 1) { ctx.beginPath(); ctx.arc(segment[0].x, segment[0].y, 3.5, 0, Math.PI * 2); ctx.fillStyle = "#a6e1e9"; ctx.fill(); }
   });
   if (revealChart) {
     revealChart = false;
@@ -370,7 +365,7 @@ function chartHover(event) {
   const tip = $("chart-tip");
   $("chart-cross").style.transform = `translateX(${point.x}px)`;
   $("chart-dot").style.transform = `translate(${point.x}px,${point.y}px)`;
-  tip.innerHTML = `<strong>${fmt(point.value, 6)} ${escape(chartData.unit)}</strong><span>${escape(date(point.timestamp))} · registro ${fmt(point.seq, 0)}</span>`;
+  tip.innerHTML = `<strong>${fmt(point.avg, 4)} ${escape(chartData.unit)}</strong><span>${escape(date(point.t))} · mín. ${fmt(point.min, 3)} · máx. ${fmt(point.max, 3)}</span>`;
   const flip = point.x > box.clientWidth - tip.offsetWidth - 30;
   const tipY = Math.max(8, Math.min(point.y - tip.offsetHeight - 14, box.clientHeight - tip.offsetHeight - 8));
   tip.style.transform = `translate(${flip ? point.x - tip.offsetWidth - 14 : point.x + 14}px,${tipY}px)`;
@@ -520,9 +515,8 @@ $("explorer-file").onchange = $("explorer-group").onchange = task(() => loadExpl
 $("explorer-stream").onchange = task(async () => { recordOffset = 0; focusedField = null; await loadRecords(); });
 $("records-prev").onclick = task(async () => { recordOffset = Math.max(0, recordOffset - 100); await loadRecords(); });
 $("records-next").onclick = task(async () => { recordOffset += 100; await loadRecords(); });
-$("chart-file").onchange = task(loadChartStreams);
-$("chart-stream").onchange = task(loadChartFields);
-$("chart-field").onchange = $("chart-normalized").onchange = task(loadChart);
+$("chart-file").onchange = task(loadChartMetrics);
+$("chart-field").onchange = task(loadChart);
 $("event-file").onchange = $("search-events").onclick = task(() => loadEvents());
 $("events-prev").onclick = task(async () => { eventOffset = Math.max(0, eventOffset - 100); await loadEvents(false); });
 $("events-next").onclick = task(async () => { eventOffset += 100; await loadEvents(false); });
@@ -573,9 +567,9 @@ $("export-form").onsubmit = task(async event => {
   event.preventDefault();
   const context = {scope: $("export-scope").value, tab: active,
     include_data: $("export-data").checked, include_originals: $("export-originals").checked,
-    normalized: $("chart-normalized").value === "1", timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    normalized: true, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     file: 0, stream: 0, field: "", search: "", group: ""};
-  if (active === "charts") Object.assign(context, {file: $("chart-file").value, stream: $("chart-stream").value, field: $("chart-field").value});
+  if (active === "charts") Object.assign(context, {file: $("chart-file").value, field: $("chart-field").value});
   if (active === "explorer") Object.assign(context, {file: $("explorer-file").value, stream: $("explorer-stream").value, field: focusedField || "", search: $("field-search").value, group: $("explorer-group").value});
   if (active === "sessions") context.file = $("session-select").value;
   if (active === "operations" && context.scope === "view") Object.assign(context, {scope: "operation", operation: operationsData?.operations.find(op => op.status === "open")?.id || 0});

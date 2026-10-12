@@ -24,7 +24,7 @@ const {JSDOM, VirtualConsole} = require("../.tooling/node_modules/jsdom");
   win.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
   win.HTMLDialogElement.prototype.close = function () { this.open = false; };
   win.setInterval = () => 0;
-  win.eval(fs.readFileSync(path.join(__dirname, "../web/app.js"), "utf8") + '\nwindow.__test = {refresh, loadStatus, loadChartFields, loadChart};');
+  win.eval(fs.readFileSync(path.join(__dirname, "../web/app.js"), "utf8") + '\nwindow.__test = {refresh, loadStatus, loadChartMetrics, loadChart};');
   const $ = id => win.document.getElementById(id);
   const until = async condition => {
     for (let i = 0; i < 300 && !condition(); i++) await new Promise(resolve => setTimeout(resolve, 50));
@@ -60,15 +60,15 @@ const {JSDOM, VirtualConsole} = require("../.tooling/node_modules/jsdom");
     assert.ok($("capabilities-table").textContent.includes("Painel futuro"));
     assert.ok($("capabilities-table").textContent.includes("depende de sensor"));
     win.document.querySelector('[data-tab="charts"]').click();
-    await until(() => $("chart-stream").options.length > 0 && $("chart-unit").textContent.length > 0);
-    assert.ok(![...$("chart-stream").options].some(option => option.textContent.includes("AHRS")), "Gráficos desta versão devem ficar no recorte operacional");
-    const heartbeat = [...$("chart-stream").options].find(option => option.textContent.startsWith("HEARTBEAT"));
-    if (heartbeat) {
-      $("chart-stream").value = heartbeat.value;
-      await win.__test.loadChartFields();
-      assert.equal($("chart-field").value, "_armed");
+    await until(() => $("chart-field").options.length > 0 && $("chart-unit").textContent.length > 0);
+    const metrics = [...$("chart-field").options].map(option => option.value);
+    assert.ok(metrics.every(metric => ["depth", "voltage", "current", "consumed", "energy", "armed"].includes(metric)), "Gráficos desta versão ficam no recorte operacional");
+    if (metrics.includes("armed")) {
+      $("chart-field").value = "armed";
+      await win.__test.loadChart();
       assert.ok($("chart-title").textContent.includes("Estado armado"));
       assert.ok($("chart-unit").textContent.includes("desarmado"));
+      assert.ok($("chart-info").textContent.includes("10 s"));
     }
     win.document.querySelector('[data-tab="explorer"]').click();
     await until(() => $("explorer-stream").options.length > 0 && $("export-csv").hasAttribute("href"));

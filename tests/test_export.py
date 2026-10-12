@@ -62,18 +62,14 @@ class ExportTests(HistoryFixture):
             self.assertEqual(6, snapshot.overview()["records"])
         self.assertEqual(1, self.store.overview()["records"])
 
-    def test_series_cache_invalidates_on_source_update(self):
+    def test_series_are_replaced_when_source_is_updated(self):
         source = self.make_file()
-        import_file(self.store, source, "same-source")
-        stream = next(s for s in self.store.streams() if s["type"] == "HEARTBEAT")
-        old = self.store.series(stream["id"], "_armed")
-        self.assertIs(old, self.store.series(stream["id"], "_armed"))
+        first = import_file(self.store, source, "same-source")["id"]
+        self.assertEqual(1, max(p["max"] for p in self.store.points(first, "armed")["points"]))
         tlog(source, [(self.now, heartbeat(False))])
-        import_file(self.store, source, "same-source")
-        stream = next(s for s in self.store.streams() if s["type"] == "HEARTBEAT")
-        new = self.store.series(stream["id"], "_armed")
-        self.assertEqual(1, new["total"])
-        self.assertIsNot(old, new)
+        self.assertEqual(first, import_file(self.store, source, "same-source")["id"])
+        points = self.store.points(first, "armed")["points"]
+        self.assertEqual([0], [point["max"] for point in points])
 
     def test_cancelled_export_cleans_partial_file(self):
         import_file(self.store, self.make_file())
@@ -122,19 +118,20 @@ class ExportTests(HistoryFixture):
                     self.assertIsNone(archive.testzip())
                     manifest = json.loads(archive.read("Bravo-Viewer/manifest.json"))
                     self.assertEqual(6, sum(item["records"] for item in manifest["entries"]))
-            stream = next(s for s in service.store.streams() if s["type"] == "HEARTBEAT")
+            file_id = service.store.files()[0]["id"]
             service.heavy_queries.acquire(); service.heavy_queries.acquire()
             try:
                 with self.assertRaises(HTTPError) as caught:
-                    urlopen(base + "/api/series?stream=" + str(stream["id"]) + "&field=_armed")
+                    urlopen(base + f"/api/series?file={file_id}&metric=armed")
                 self.assertEqual(503, caught.exception.code)
                 caught.exception.close()
                 with urlopen(base + "/health") as response:
                     self.assertEqual("ok", json.load(response)["status"])
             finally:
                 service.heavy_queries.release(); service.heavy_queries.release()
-            with urlopen(base + "/api/series?stream=" + str(stream["id"]) + "&field=_armed") as response:
-                self.assertEqual(4, json.load(response)["total"])
+            with urlopen(base + f"/api/series?file={file_id}&metric=armed") as response:
+                points = json.load(response)["points"]
+                self.assertEqual((0, 1), (min(p["min"] for p in points), max(p["max"] for p in points)))
         finally:
             service.close(); server.shutdown(); server.server_close()
 

@@ -10,6 +10,7 @@ import time
 import uuid
 
 from .blueos import BlueOS, validate_host
+from .compact import Series
 from .ingest import Summary, import_file, timestamp
 from .model import clean, dumps, flatten
 from .store import Store
@@ -67,6 +68,11 @@ class Service:
                 thread = threading.Thread(target=target, args=args, daemon=True)
                 thread.start()
                 self.threads.append(thread)
+            with self.store.db() as db:
+                legacy = db.execute("SELECT 1 FROM records LIMIT 1").fetchone()
+            if legacy:
+                # Históricos anteriores à 0.5 guardavam cada mensagem; converte uma única vez.
+                self.submit("compact")
 
     def configure(self, updates):
         allowed = {}
@@ -136,6 +142,8 @@ class Service:
                     result = build_bundle(self.store, job_id, args["context"], self.reporter(job_id), self.stop)
                     if args["context"]["scope"] == "operation":
                         self.store.set_operation_bundle(args["context"]["operation"], job_id)
+                elif action == "compact":
+                    result = {"sessions": self.store.compact_legacy(lambda text: self.jobs[job_id].update(progress=text))}
                 elif action == "close_operation":
                     result = self.close_operation(job_id, args)
                 else:
@@ -174,6 +182,7 @@ class Service:
         removed = []
         for old in self.store.expired_operations():
             removed.append(self.store.delete_operation(old, lambda text: report(text, 95)))
+        self.store.release_originals()
         report("Concluído", 100)
         return {**result, **ids, "removed": removed, "sync_error": sync_error}
 
@@ -285,7 +294,10 @@ class Service:
                         summary.value["armed_periods"].append({**active, "open": True, "reason": "Coleta interrompida antes do reinício"})
             else:
                 file_id = db.execute("INSERT INTO files(source_key,name,kind,path,size,imported_at,operation_id) VALUES(?,?,'live','',0,?,?)", (key, f"Coleta {host} · {date} UTC · {operation['name']}", time.time(), operation["id"])).lastrowid
-            seq = db.execute("SELECT coalesce(max(seq),-1) FROM records WHERE file_id=?", (file_id,)).fetchone()[0] + 1
+            # A coleta ao vivo não guarda cada amostra (o .tlog é a fonte completa): só inventário,
+            # ocorrências, séries de 10 s e resumo.
+            seq = summary.value["records"]
+            series = Series()
             for ts, name, origin, data in entries:
                 stream = db.execute("SELECT id,fields FROM streams WHERE file_id=? AND type=? AND origin=?", (file_id, name, origin)).fetchone()
                 fields = set(flatten(data))
@@ -295,11 +307,14 @@ class Service:
                     db.execute("UPDATE streams SET count=count+1,last_ts=?,fields=? WHERE id=?", (ts, dumps(sorted(fields)), stream_id))
                 else:
                     stream_id = db.execute("INSERT INTO streams(file_id,type,origin,count,fields,first_ts,last_ts) VALUES(?,?,?,1,?,?,?)", (file_id, name, origin, dumps(sorted(fields)), ts, ts)).lastrowid
-                segment = summary.add(ts, name, origin, data, seq, "live", self.store.catalog)
-                db.execute("INSERT INTO records(file_id,stream_id,seq,ts,segment,data) VALUES(?,?,?,?,?,?)", (file_id, stream_id, seq, ts, segment, dumps(data)))
+                summary.add(ts, name, origin, data, seq, "live", self.store.catalog)
+                series.add(ts, name, origin, data, "live", self.store.catalog)
                 if name == "STATUSTEXT":
                     db.execute("INSERT INTO events(file_id,ts,seq,severity,type,text) VALUES(?,?,?,?,?,?)", (file_id, ts, seq, str(data.get("severity", "INFO")), name, str(data.get("text", ""))))
                 seq += 1
+            db.executemany("INSERT INTO series_points(file_id,metric,bucket,low,high,total,count) VALUES(?,?,?,?,?,?,?) "
+                           "ON CONFLICT(file_id,metric,bucket) DO UPDATE SET low=min(low,excluded.low),high=max(high,excluded.high),"
+                           "total=total+excluded.total,count=count+excluded.count", series.rows(file_id))
             db.execute("UPDATE files SET summary=?,imported_at=? WHERE id=?", (dumps(summary.value), time.time(), file_id))
         self.live_seen.update(markers)
         self.collection["samples"] += len(entries)

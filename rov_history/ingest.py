@@ -9,6 +9,7 @@ import re
 import shutil
 import time
 
+from .compact import Series, scan_tlog
 from .model import clean, dumps, flatten
 
 
@@ -186,46 +187,62 @@ class Summary:
             self.value["active_armed_period"] = None
 
 
-def append_records(store, meta, lines):
-    """Acrescenta registros já decodificados no ROV (coleta ao vivo) a uma cópia no PC.
+def original_records(path, kind, types=None):
+    """Mensagens do log original, decodificadas, para inventário e exportação sob demanda.
 
-    O resumo é o calculado pelo ROV; recalcular por partes contaria lacunas falsas.
+    types: decodifica só esses tipos no .tlog (os demais vêm sem dados).
     """
-    with store.write_lock, store.db() as db:
-        row = db.execute("SELECT id FROM files WHERE source_key=?", (meta["source_key"],)).fetchone()
-        if row:
-            file_id = row["id"]
-        else:
-            file_id = db.execute("INSERT INTO files(source_key,name,kind,path,size,imported_at,operation_id) VALUES(?,?,?,'',0,?,?)",
-                                 (meta["source_key"], meta["name"], meta["kind"], meta["imported_at"], meta["operation_id"])).lastrowid
-        streams = {(r["type"], r["origin"]): {"id": r["id"], "fields": set(json.loads(r["fields"])), "count": r["count"], "last": r["last_ts"]}
-                   for r in db.execute("SELECT * FROM streams WHERE file_id=?", (file_id,))}
-        added = 0
-        batch = []
-        for line in lines:
-            item = json.loads(line)
-            key = (item["type"], item["origin"])
-            if key not in streams:
-                stream_id = db.execute("INSERT INTO streams(file_id,type,origin,count,fields,first_ts,last_ts) VALUES(?,?,?,0,'[]',?,?)", (file_id, *key, item["ts"], item["ts"])).lastrowid
-                streams[key] = {"id": stream_id, "fields": set(), "count": 0, "last": item["ts"]}
-            info = streams[key]
-            info["count"] += 1
-            info["fields"].update(flatten(item["data"]))
-            info["last"] = item["ts"]
-            batch.append((file_id, info["id"], item["seq"], item["ts"], item["segment"], dumps(item["data"])))
-            if item["type"] == "STATUSTEXT":
-                db.execute("INSERT INTO events(file_id,ts,seq,severity,type,text) VALUES(?,?,?,?,?,?)", (file_id, item["ts"], item["seq"], str(item["data"].get("severity", "INFO")), "STATUSTEXT", str(item["data"].get("text", ""))))
-            if len(batch) >= 3000:
-                db.executemany("INSERT INTO records(file_id,stream_id,seq,ts,segment,data) VALUES(?,?,?,?,?,?)", batch)
-                added += len(batch); batch.clear()
-        if batch:
-            db.executemany("INSERT INTO records(file_id,stream_id,seq,ts,segment,data) VALUES(?,?,?,?,?,?)", batch)
-            added += len(batch)
-        for info in streams.values():
-            db.execute("UPDATE streams SET count=?,fields=?,last_ts=? WHERE id=?", (info["count"], dumps(sorted(info["fields"])), info["last"], info["id"]))
-        db.execute("UPDATE files SET summary=?,imported_at=?,operation_id=?,name=?,note=? WHERE id=?",
-                   (dumps(meta["summary"]), meta["imported_at"], meta["operation_id"], meta["name"], meta.get("note", ""), file_id))
-    return added
+    if kind == "tlog":
+        yield from scan_tlog(path, decode_all=True, only=types)
+        return
+    for ts, name, origin, data, _ in (log_records(path) if kind == "log" else mav_records(path, kind)):
+        yield ts, name, origin, clean(data)
+
+
+def read_file(store, destination, kind, progress=None, label=""):
+    """Lê o arquivo sem tocar no banco: resumo, inventário, ocorrências e séries.
+
+    Fica fora da trava de escrita; a coleta ao vivo continua durante leituras longas.
+    """
+    summary = Summary()
+    series = Series()
+    streams = {}
+    events = []
+    if kind == "tlog":
+        records = ((ts, name, origin, data, {}) for ts, name, origin, data in scan_tlog(destination))
+    else:
+        records = log_records(destination) if kind == "log" else mav_records(destination, kind)
+    for seq, (ts, name, origin, data, units) in enumerate(records):
+        if data is not None:
+            data = clean(data)
+        info = streams.get((name, origin))
+        if info is None:
+            info = streams[(name, origin)] = {"count": 0, "fields": set(), "first": ts, "last": ts, "units": {}}
+        info["count"] += 1
+        if data:
+            info["fields"].update(flatten(data))
+        info["last"] = ts
+        info["units"].update(units)
+        summary.add(ts, name, origin, data or {}, seq, kind, store.catalog)
+        series.add(ts, name, origin, data, kind, store.catalog)
+        if data is not None:
+            event = None
+            severity = "INFO"
+            if name in ("STATUSTEXT", "MSG"):
+                event = str(data.get("text", data.get("Message", "")))
+                severity = str(data.get("severity", "INFO"))
+            elif name in ("ERR", "EV", "ARM", "MODE", "BAD_DATA"):
+                event = dumps(data)
+            elif kind == "log" and data.get("level") in ("WARN", "WARNING", "ERROR", "CRITICAL"):
+                event = data.get("text", "")
+                severity = data["level"]
+            if event is not None:
+                events.append((ts, seq, severity, name, event))
+        if progress and seq % 50000 == 0:
+            progress(label, seq)
+    summary.finish_period("Fim do arquivo ou sessão ainda aberta")
+    summary.value["kind"] = kind
+    return summary, series, streams, events
 
 
 def import_file(store, source, source_key=None, progress=None, display_name=None, operation_id=None):
@@ -239,68 +256,49 @@ def import_file(store, source, source_key=None, progress=None, display_name=None
     sha = fingerprint(source)
     source_key = source_key or "sha256:" + sha
     display_name = display_name or source.name
+
+    def unchanged(db):
+        old = db.execute("SELECT * FROM files WHERE source_key=?", (source_key,)).fetchone()
+        if old and old["sha256"] == sha:
+            return old, {"id": old["id"], "duplicate": True}
+        if old and old["operation_id"] is not None and operation_id is None:
+            closed = db.execute("SELECT status FROM operations WHERE id=?", (old["operation_id"],)).fetchone()
+            if closed and closed["status"] == "closed":
+                # Operações encerradas são congeladas; a versão exportada continua válida.
+                return old, {"id": old["id"], "duplicate": True, "frozen": True}
+        # Arquivos locais idênticos não são importados duas vezes com nomes diferentes.
+        duplicate = db.execute("SELECT id FROM files WHERE sha256=?", (sha,)).fetchone()
+        if duplicate:
+            return old, {"id": duplicate["id"], "duplicate": True}
+        return old, None
+
+    with store.db() as db:
+        if unchanged(db)[1]:
+            return unchanged(db)[1]
     originals = store.directory / "originals"
     originals.mkdir(exist_ok=True)
     destination = originals / (sha + suffix)
     if not destination.exists():
         shutil.copyfile(source, destination)
-    summary = Summary()
+    summary, series, streams, events = read_file(store, destination, kind, progress, source.name)
     with store.write_lock, store.db() as db:
-        old = db.execute("SELECT * FROM files WHERE source_key=?", (source_key,)).fetchone()
-        if old and old["sha256"] == sha:
-            return {"id": old["id"], "duplicate": True}
-        if old and old["operation_id"] is not None and operation_id is None:
-            closed = db.execute("SELECT status FROM operations WHERE id=?", (old["operation_id"],)).fetchone()
-            if closed and closed["status"] == "closed":
-                # Operações encerradas são congeladas; a versão exportada continua válida.
-                return {"id": old["id"], "duplicate": True, "frozen": True}
-        # Arquivos locais idênticos não são importados duas vezes com nomes diferentes.
-        duplicate = db.execute("SELECT id FROM files WHERE sha256=?", (sha,)).fetchone()
-        if duplicate:
-            return {"id": duplicate["id"], "duplicate": True}
+        old, result = unchanged(db)
+        if result:
+            return result
         if old:
             file_id = old["id"]
-            db.execute("DELETE FROM records WHERE file_id=?", (file_id,))
-            db.execute("DELETE FROM events WHERE file_id=?", (file_id,))
-            db.execute("DELETE FROM streams WHERE file_id=?", (file_id,))
+            for table in ("records", "events", "streams", "series_points"):
+                db.execute(f"DELETE FROM {table} WHERE file_id=?", (file_id,))
             db.execute("UPDATE files SET name=?,kind=?,path=?,sha256=?,size=?,imported_at=?,status='ready' WHERE id=?", (display_name, kind, str(destination.resolve()), sha, source.stat().st_size, time.time(), file_id))
         else:
             file_id = db.execute("INSERT INTO files(source_key,name,kind,path,sha256,size,imported_at) VALUES(?,?,?,?,?,?,?)", (source_key, display_name, kind, str(destination.resolve()), sha, source.stat().st_size, time.time())).lastrowid
-        streams = {}
-        batch = []
-        records = log_records(destination) if kind == "log" else mav_records(destination, kind)
-        for seq, (ts, name, origin, data, units) in enumerate(records):
-            data = clean(data)
-            key = (name, origin)
-            if key not in streams:
-                stream_id = db.execute("INSERT INTO streams(file_id,type,origin,count,fields,first_ts,last_ts) VALUES(?,?,?,0,'[]',?,?)", (file_id, name, origin, ts, ts)).lastrowid
-                streams[key] = {"id": stream_id, "count": 0, "fields": set(), "last": ts, "units": {}}
-            info = streams[key]
-            info["count"] += 1
-            info["fields"].update(flatten(data))
-            info["last"] = ts
-            info["units"].update(units)
-            segment = summary.add(ts, name, origin, data, seq, kind, store.catalog)
-            batch.append((file_id, info["id"], seq, ts, segment, dumps(data)))
-            event = None
-            severity = "INFO"
-            if name in ("STATUSTEXT", "MSG"):
-                event = str(data.get("text", data.get("Message", "")))
-                severity = str(data.get("severity", "INFO"))
-            elif name in ("ERR", "EV", "ARM", "MODE", "BAD_DATA"):
-                event = dumps(data)
-            elif kind == "log" and data.get("level") in ("WARN", "WARNING", "ERROR", "CRITICAL"):
-                event = data.get("text", "")
-                severity = data["level"]
-            if event is not None:
-                db.execute("INSERT INTO events(file_id,ts,seq,severity,type,text) VALUES(?,?,?,?,?,?)", (file_id, ts, seq, severity, name, event))
-            if len(batch) >= 3000:
-                db.executemany("INSERT INTO records(file_id,stream_id,seq,ts,segment,data) VALUES(?,?,?,?,?,?)", batch)
-                batch.clear()
-                if progress:
-                    progress(source.name, seq + 1)
-        if batch:
-            db.executemany("INSERT INTO records(file_id,stream_id,seq,ts,segment,data) VALUES(?,?,?,?,?,?)", batch)
+        units = {}
+        for (name, origin), info in streams.items():
+            stream_id = db.execute("INSERT INTO streams(file_id,type,origin,count,fields,first_ts,last_ts) VALUES(?,?,?,?,?,?,?)", (file_id, name, origin, info["count"], dumps(sorted(info["fields"])), info["first"], info["last"])).lastrowid
+            if info["units"]:
+                units[str(stream_id)] = info["units"]
+        db.executemany("INSERT INTO events(file_id,ts,seq,severity,type,text) VALUES(?,?,?,?,?,?)", [(file_id, *event) for event in events])
+        db.executemany("INSERT INTO series_points(file_id,metric,bucket,low,high,total,count) VALUES(?,?,?,?,?,?,?)", series.rows(file_id))
         if operation_id is not None:
             # Cópia no PC: a operação é a definida pelo ROV.
             db.execute("UPDATE files SET operation_id=? WHERE id=?", (operation_id, file_id))
@@ -310,10 +308,7 @@ def import_file(store, source, source_key=None, progress=None, display_name=None
             last = max((info["last"] for info in streams.values() if info["last"] is not None), default=None)
             operation = current["id"] if current and (last is None or last >= current["started_at"] - 300) else None
             db.execute("UPDATE files SET operation_id=? WHERE id=?", (operation, file_id))
-        summary.finish_period("Fim do arquivo ou sessão ainda aberta")
-        summary.value["field_units"] = {str(info["id"]): info["units"] for info in streams.values() if info["units"]}
-        summary.value["kind"] = kind
-        for info in streams.values():
-            db.execute("UPDATE streams SET count=?,fields=?,last_ts=? WHERE id=?", (info["count"], dumps(sorted(info["fields"])), info["last"], info["id"]))
+        summary.value["field_units"] = units
         db.execute("UPDATE files SET summary=? WHERE id=?", (dumps(summary.value), file_id))
+    store.forget_series()
     return {"id": file_id, "duplicate": False, "records": summary.value["records"]}

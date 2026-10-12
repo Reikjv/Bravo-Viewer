@@ -6,10 +6,13 @@ import io
 import json
 from pathlib import Path
 import sqlite3
+import itertools
+import shutil
 import threading
 import time
 import uuid
 
+from .compact import BUCKET_SECONDS, METRICS
 from .model import Catalog, category, dumps, flatten
 
 
@@ -95,9 +98,16 @@ class Store:
                     client TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '',
                     started_at REAL NOT NULL, ended_at REAL, status TEXT NOT NULL DEFAULT 'open',
                     summary TEXT NOT NULL DEFAULT '{}', bundle_id TEXT, downloaded_at REAL);
+                CREATE TABLE IF NOT EXISTS series_points(
+                    file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                    metric TEXT NOT NULL, bucket INTEGER NOT NULL,
+                    low REAL NOT NULL, high REAL NOT NULL, total REAL NOT NULL, count INTEGER NOT NULL,
+                    PRIMARY KEY(file_id, metric, bucket));
             """)
-            if "operation_id" not in {row["name"] for row in db.execute("PRAGMA table_info(files)")}:
-                db.execute("ALTER TABLE files ADD COLUMN operation_id INTEGER")
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(files)")}
+            for column, kind in (("operation_id", "INTEGER"), ("remote_revision", "REAL"), ("pc_copied_at", "REAL")):
+                if column not in columns:
+                    db.execute(f"ALTER TABLE files ADD COLUMN {column} {kind}")
             db.execute("CREATE INDEX IF NOT EXISTS files_operation ON files(operation_id)")
             if not mirror and not db.execute("SELECT 1 FROM settings WHERE key='device_id'").fetchone():
                 # Identidade fixa do equipamento: renomear o ROV não mistura históricos no PC ou na nuvem.
@@ -195,19 +205,97 @@ class Store:
             new = db.execute("INSERT INTO operations(name,started_at) VALUES(?,?)", (f"Operação {number}", now)).lastrowid
         return {"closed": op["id"], "current": new}
 
-    def records_after(self, file_id, after=-1, limit=20000):
-        """Registros de uma sessão a partir de uma sequência, para sincronização incremental."""
-        limit = min(max(1, limit), 50000)
+    def file_meta(self, file_id):
+        """O que o PC precisa de uma sessão, sem as mensagens: inventário, ocorrências e séries."""
         with self.db() as db:
-            rows = db.execute("SELECT r.seq,r.ts,r.segment,r.data,s.type,s.origin FROM records r JOIN streams s ON s.id=r.stream_id WHERE r.file_id=? AND r.seq>? ORDER BY r.seq LIMIT ?", (file_id, after, limit))
-            for row in rows:
-                yield (dumps({"seq": row["seq"], "ts": row["ts"], "segment": row["segment"], "type": row["type"], "origin": row["origin"], "data": json.loads(row["data"])}) + "\n").encode()
+            streams = [dict(row) for row in db.execute("SELECT type,origin,count,fields,first_ts,last_ts FROM streams WHERE file_id=?", (file_id,))]
+            events = [list(row) for row in db.execute("SELECT ts,seq,severity,type,text FROM events WHERE file_id=? ORDER BY id", (file_id,))]
+            series = [list(row) for row in db.execute("SELECT metric,bucket,low,high,total,count FROM series_points WHERE file_id=?", (file_id,))]
+        for stream in streams:
+            stream["fields"] = json.loads(stream["fields"])
+        return {"streams": streams, "events": events, "series": series}
+
+    def apply_meta(self, remote, meta):
+        """Cópia no PC: substitui o resumo de uma sessão pelo do ROV. O log original é copiado à parte."""
+        with self.write_lock, self.db() as db:
+            row = db.execute("SELECT id,sha256,path FROM files WHERE source_key=?", (remote["source_key"],)).fetchone()
+            path = row["path"] if row and row["sha256"] == remote["sha256"] else ""
+            values = (remote["name"], remote["kind"], path, remote["sha256"], remote["size"], remote["imported_at"], dumps(remote["summary"]), remote["note"], remote["operation_id"], remote["imported_at"])
+            if row:
+                file_id = row["id"]
+                for table in ("records", "events", "streams", "series_points"):
+                    db.execute(f"DELETE FROM {table} WHERE file_id=?", (file_id,))
+                db.execute("UPDATE files SET name=?,kind=?,path=?,sha256=?,size=?,imported_at=?,summary=?,note=?,operation_id=?,remote_revision=? WHERE id=?", (*values, file_id))
+            else:
+                file_id = db.execute("INSERT INTO files(name,kind,path,sha256,size,imported_at,summary,note,operation_id,remote_revision,source_key) VALUES(?,?,?,?,?,?,?,?,?,?,?)", (*values, remote["source_key"])).lastrowid
+            db.executemany("INSERT INTO streams(file_id,type,origin,count,fields,first_ts,last_ts) VALUES(?,?,?,?,?,?,?)",
+                           [(file_id, s["type"], s["origin"], s["count"], dumps(s["fields"]), s["first_ts"], s["last_ts"]) for s in meta["streams"]])
+            db.executemany("INSERT INTO events(file_id,ts,seq,severity,type,text) VALUES(?,?,?,?,?,?)", [(file_id, *event) for event in meta["events"]])
+            db.executemany("INSERT INTO series_points(file_id,metric,bucket,low,high,total,count) VALUES(?,?,?,?,?,?,?)", [(file_id, *point) for point in meta["series"]])
+        self.forget_series()
+        return file_id
+
+    def set_original(self, source_key, path):
+        with self.write_lock, self.db() as db:
+            db.execute("UPDATE files SET path=? WHERE source_key=?", (str(path), source_key))
+
+    def acknowledge_copy(self, file_id, sha):
+        """O PC confirmou a cópia íntegra do log original."""
+        with self.write_lock, self.db() as db:
+            if not db.execute("UPDATE files SET pc_copied_at=? WHERE id=? AND sha256=?", (time.time(), file_id, sha)).rowcount:
+                raise ValueError("Sessão ou conteúdo diferente do confirmado")
+        return self.release_originals()
+
+    def release_originals(self):
+        """Libera no ROV os logs de operações encerradas já copiados para o PC; resumos e gráficos ficam."""
+        originals = (self.directory / "originals").resolve()
+        with self.db() as db:
+            rows = db.execute("SELECT f.id,f.path FROM files f JOIN operations o ON o.id=f.operation_id WHERE o.status='closed' AND f.pc_copied_at IS NOT NULL AND f.path!=''").fetchall()
+        released = 0
+        for row in rows:
+            path = Path(row["path"]).resolve()
+            if path.is_relative_to(originals) and path.is_file():
+                path.unlink()
+                released += 1
+            with self.write_lock, self.db() as db:
+                db.execute("UPDATE files SET path='' WHERE id=?", (row["id"],))
+        return released
+
+    def compact_legacy(self, progress=lambda text: None):
+        """Converte históricos anteriores à 0.5: gera séries e remove as mensagens guardadas uma a uma."""
+        from .compact import Series
+        from .ingest import read_file
+        with self.db() as db:
+            legacy = db.execute("SELECT DISTINCT f.id,f.kind,f.path,f.name FROM files f JOIN records r ON r.file_id=f.id").fetchall()
+        for index, file in enumerate(legacy):
+            progress(f"Compactando histórico anterior: {index + 1}/{len(legacy)} · {file['name']}")
+            series = Series()
+            path = Path(file["path"]) if file["path"] else None
+            if path and path.is_file() and file["kind"] in ("tlog", "bin"):
+                series = read_file(self, path, file["kind"])[1]
+            else:
+                with self.db() as db:
+                    for row in db.execute("SELECT r.ts,r.data,s.type,s.origin FROM records r JOIN streams s ON s.id=r.stream_id WHERE r.file_id=? ORDER BY r.seq", (file["id"],)):
+                        series.add(row["ts"], row["type"], row["origin"], json.loads(row["data"]), file["kind"], self.catalog)
+            with self.write_lock, self.db() as db:
+                db.execute("DELETE FROM series_points WHERE file_id=?", (file["id"],))
+                db.executemany("INSERT INTO series_points(file_id,metric,bucket,low,high,total,count) VALUES(?,?,?,?,?,?,?)", series.rows(file["id"]))
+                db.execute("DELETE FROM records WHERE file_id=?", (file["id"],))
+        if legacy:
+            # Devolve ao disco o espaço das mensagens removidas (feito uma única vez).
+            with self.write_lock:
+                connection = sqlite3.connect(self.path, timeout=60)
+                try:
+                    connection.execute("VACUUM")
+                finally:
+                    connection.close()
+        return len(legacy)
 
     def sync_manifest(self):
         config = self.config()
         with self.db() as db:
             operations = [dict(row) for row in db.execute("SELECT id,name,location,client,notes,started_at,ended_at,status,summary FROM operations ORDER BY id")]
-            files = [dict(row) for row in db.execute("SELECT f.id,f.operation_id,f.source_key,f.name,f.kind,f.sha256,f.size,f.imported_at,f.summary,f.note,(SELECT coalesce(max(seq),-1) FROM records r WHERE r.file_id=f.id) AS last_seq FROM files f ORDER BY f.id")]
+            files = [dict(row) for row in db.execute("SELECT id,operation_id,source_key,name,kind,sha256,size,imported_at,summary,note,path!='' AS has_original FROM files ORDER BY id")]
         for item in operations + files:
             item["summary"] = json.loads(item["summary"])
         return {"device_id": config.get("device_id"), "equipment": config["equipment"], "operations": operations, "files": files}
@@ -241,6 +329,7 @@ class Store:
                 db.execute("DELETE FROM records WHERE file_id=?", (file["id"],))
                 db.execute("DELETE FROM events WHERE file_id=?", (file["id"],))
                 db.execute("DELETE FROM streams WHERE file_id=?", (file["id"],))
+                db.execute("DELETE FROM series_points WHERE file_id=?", (file["id"],))
                 db.execute("DELETE FROM files WHERE id=?", (file["id"],))
             if file["path"]:
                 path = Path(file["path"]).resolve()
@@ -291,79 +380,61 @@ class Store:
         result["units"] = json.loads(result.pop("file_summary")).get("field_units", {}).get(str(stream_id), {})
         return result
 
+    def stream_rows(self, stream):
+        """Mensagens de um tipo/origem: do banco (históricos anteriores à 0.5) ou relidas do log original.
+
+        A partir da 0.5 cada mensagem não é guardada; o .tlog é a fonte completa.
+        """
+        with self.db() as db:
+            stored = db.execute("SELECT 1 FROM records WHERE stream_id=? LIMIT 1", (stream["id"],)).fetchone()
+            if stored:
+                for row in db.execute("SELECT seq,ts,segment,data FROM records WHERE stream_id=? ORDER BY seq", (stream["id"],)):
+                    yield row["seq"], row["ts"], row["segment"], json.loads(row["data"])
+                return
+            file = db.execute("SELECT path,kind FROM files WHERE id=?", (stream["file_id"],)).fetchone()
+        path = Path(file["path"]) if file and file["path"] else None
+        if path is None or not path.is_file():
+            return
+        from .ingest import original_records
+        for seq, (ts, name, origin, data) in enumerate(original_records(path, file["kind"], {stream["type"].split(":")[0]})):
+            if name == stream["type"] and origin == stream["origin"]:
+                yield seq, ts, 0, data
+
+    def raw_available(self, stream):
+        with self.db() as db:
+            if db.execute("SELECT 1 FROM records WHERE stream_id=? LIMIT 1", (stream["id"],)).fetchone():
+                return True
+            file = db.execute("SELECT path FROM files WHERE id=?", (stream["file_id"],)).fetchone()
+        return bool(file and file["path"] and Path(file["path"]).is_file())
+
     def records(self, stream_id, offset=0, limit=100):
         stream = self.stream(stream_id)
-        with self.db() as db:
-            rows = db.execute("SELECT seq,ts,segment,data FROM records WHERE stream_id=? ORDER BY seq LIMIT ? OFFSET ?", (stream_id, min(limit, 500), offset)).fetchall()
-        return {"stream": {**stream, "fields": json.loads(stream["fields"])}, "total": stream["count"], "offset": offset, "rows": [{**dict(row), "data": json.loads(row["data"])} for row in rows]}
+        rows = itertools.islice(self.stream_rows(stream), offset, offset + min(limit, 500))
+        return {"stream": {**stream, "fields": json.loads(stream["fields"])}, "total": stream["count"], "offset": offset,
+                "available": self.raw_available(stream),
+                "rows": [{"seq": seq, "ts": ts, "segment": segment, "data": data} for seq, ts, segment, data in rows]}
 
-    def series(self, stream_id, field, points=700, normalized=True):
-        stream = self.stream(stream_id)
-        points = min(2000, max(10, points))
-        key = (stream_id, stream["revision"], stream["count"], stream["last_ts"], field, points, normalized)
-        with self._cache_lock:
-            if key in self._series_cache:
-                self._series_cache.move_to_end(key)
-                return self._series_cache[key]
-        result = self._series(stream, field, points, normalized)
-        with self._cache_lock:
-            self._series_cache[key] = result
-            self._series_cache.move_to_end(key)
-            while len(self._series_cache) > 8:
-                self._series_cache.popitem(last=False)
-        return result
-
-    def _series(self, stream, field, points, normalized):
-        stream_id = stream["id"]
-        armed_indicator = field == "_armed" and stream["type"] == "HEARTBEAT" and stream["origin"] == "1:1"
-        if not armed_indicator and field not in json.loads(stream["fields"]):
-            raise ValueError("Campo não encontrado nessa origem")
-        points = min(2000, max(10, points))
+    def metrics(self, file_id):
+        """Indicadores com série de 10 s nesta sessão; profundidade só com sensor externo registrado."""
         with self.db() as db:
-            bounds = db.execute("SELECT min(seq),max(seq) FROM records WHERE stream_id=?", (stream_id,)).fetchone()
-            if bounds[0] is None:
-                return {"points": [], "unit": ""}
-            # Buckets por ordem preservam saltos de relógio. Min/max mantêm os picos;
-            # valores inválidos são lacunas. O gráfico é uma redução, não o CSV.
-            width = max(1, (bounds[1] - bounds[0] + 1) // points)
-            rows = db.execute("SELECT seq,ts,segment,data FROM records WHERE stream_id=? ORDER BY seq", (stream_id,))
-            buckets = {}
-            unit = ""
-            invalid = 0
-            for row in rows:
-                data = json.loads(row["data"])
-                raw = flatten(data).get(field)
-                measure = self.catalog.measure(stream["kind"], stream["type"], field, raw, data)
-                if armed_indicator:
-                    mode = data.get("base_mode")
-                    if isinstance(mode, dict):
-                        mode = mode.get("bits")
-                    valid = isinstance(mode, int)
-                    raw = int(bool(mode & 128)) if valid else None
-                    measure = {"value": raw, "unit": "0 desarmado / 1 armado", "valid": valid}
-                if stream["kind"] == "bin":
-                    measure = {"value": raw, "unit": stream["units"].get(field.split("[", 1)[0], ""), "valid": raw is not None}
-                unit = measure["unit"] if normalized or armed_indicator else self.catalog.unit(stream["kind"], stream["type"], field)
-                value = measure["value"] if normalized else raw
-                if not measure["valid"] or not isinstance(value, (int, float)):
-                    value = None
-                    invalid += 1
-                point = {"seq": row["seq"], "timestamp": row["ts"], "segment": row["segment"], "value": value, "raw": raw}
-                key = (row["segment"], (row["seq"] - bounds[0]) // width)
-                bucket = buckets.setdefault(key, {"first": point, "last": point, "min": point, "max": point, "invalid": None})
-                bucket["last"] = point
-                if value is None:
-                    bucket["invalid"] = point
-                else:
-                    for mode, compare in (("min", lambda a, b: a < b), ("max", lambda a, b: a > b)):
-                        old = bucket[mode]["value"]
-                        if old is None or compare(value, old):
-                            bucket[mode] = point
-            result = []
-            for bucket in buckets.values():
-                candidates = {p["seq"]: p for p in bucket.values() if p is not None}
-                result.extend(candidates[key] for key in sorted(candidates))
-        return {"points": result, "unit": unit, "invalid_samples": invalid, "total": stream["count"], "field": field, "type": stream["type"], "reduced": len(result) < stream["count"]}
+            summary = db.execute("SELECT summary FROM files WHERE id=?", (file_id,)).fetchone()
+            rows = db.execute("SELECT metric,count(*) AS buckets FROM series_points WHERE file_id=? GROUP BY metric", (file_id,)).fetchall()
+        external = bool(summary and json.loads(summary["summary"]).get("depth", {}).get("external"))
+        order = list(METRICS)
+        return sorted(({"metric": row["metric"], "label": METRICS[row["metric"]][0], "unit": METRICS[row["metric"]][1], "buckets": row["buckets"]}
+                       for row in rows if row["metric"] in METRICS and (row["metric"] != "depth" or external)), key=lambda item: order.index(item["metric"]))
+
+    def points(self, file_id, metric):
+        if metric not in METRICS:
+            raise ValueError("Indicador desconhecido")
+        with self.db() as db:
+            rows = db.execute("SELECT bucket,low,high,total,count FROM series_points WHERE file_id=? AND metric=? ORDER BY bucket", (file_id, metric)).fetchall()
+        return {"metric": metric, "label": METRICS[metric][0], "unit": METRICS[metric][1], "seconds": BUCKET_SECONDS,
+                "points": [{"t": row["bucket"] * BUCKET_SECONDS, "min": row["low"], "max": row["high"], "avg": row["total"] / row["count"]} for row in rows]}
+
+    def forget_series(self):
+        with self._cache_lock:
+            self._series_cache.clear()
 
     def events(self, file_id=None, offset=0, limit=100, search=""):
         conditions = ["text LIKE ?"]
@@ -387,28 +458,31 @@ class Store:
     def export(self, stream_id, format="csv"):
         stream = self.stream(stream_id)
         fields = json.loads(stream["fields"])
-        with self.db() as db:
-            cursor = db.execute("SELECT seq,ts,segment,data FROM records WHERE stream_id=? ORDER BY seq", (stream_id,))
-            if format == "jsonl":
-                for row in cursor:
-                    yield (dumps({"sequence": row["seq"], "timestamp": row["ts"], "clock_segment": row["segment"], "type": stream["type"], "origin": stream["origin"], "raw": json.loads(row["data"])}) + "\n").encode()
-                return
-            buffer = io.StringIO(newline="")
-            writer = csv.writer(buffer)
-            writer.writerow(["sequence", "timestamp", "clock_segment", *fields])
-            yield ("\ufeff" + buffer.getvalue()).encode("utf-8")
-            buffer.seek(0); buffer.truncate()
-            for row in cursor:
-                values = flatten(json.loads(row["data"]))
-                cells = [values.get(field, "") for field in fields]
-                # Previne execução de fórmula ao abrir textos de mensagens no Excel.
-                cells = ["'" + v if isinstance(v, str) and v.startswith(("=", "+", "-", "@", "\t", "\r")) else v for v in cells]
-                writer.writerow([row["seq"], row["ts"], row["segment"], *cells])
-                if buffer.tell() > 65536:
-                    yield buffer.getvalue().encode("utf-8")
-                    buffer.seek(0); buffer.truncate()
-            if buffer.tell():
+        rows = self.stream_rows(stream)
+        if format == "jsonl":
+            for seq, ts, segment, data in rows:
+                yield (dumps({"sequence": seq, "timestamp": ts, "clock_segment": segment, "type": stream["type"], "origin": stream["origin"], "raw": data}) + "\n").encode()
+            return
+        buffer = io.StringIO(newline="")
+        writer = csv.writer(buffer)
+        writer.writerow(["sequence", "timestamp", "clock_segment", *fields])
+        yield ("\ufeff" + buffer.getvalue()).encode("utf-8")
+        buffer.seek(0); buffer.truncate()
+        for seq, ts, segment, data in rows:
+            values = flatten(data)
+            cells = [values.get(field, "") for field in fields]
+            # Previne execução de fórmula ao abrir textos de mensagens no Excel.
+            cells = ["'" + v if isinstance(v, str) and v.startswith(("=", "+", "-", "@", "\t", "\r")) else v for v in cells]
+            writer.writerow([seq, ts, segment, *cells])
+            if buffer.tell() > 65536:
                 yield buffer.getvalue().encode("utf-8")
+                buffer.seek(0); buffer.truncate()
+        if buffer.tell():
+            yield buffer.getvalue().encode("utf-8")
+
+    def disk(self):
+        usage = shutil.disk_usage(self.directory)
+        return {"disk_free": usage.free, "disk_total": usage.total}
 
     def overview(self):
         files = self.files()
@@ -421,7 +495,7 @@ class Store:
                 if name not in observed or rank >= (observed[name].get("timestamp") or 0):
                     observed[name] = {**observation, "file": file["id"]}
                     stats[name] = value
-        return {"files": len(files), "records": sum(f["summary"].get("records", 0) for f in files), "bytes": sum(f["size"] or 0 for f in files), "statistics": stats, "statistics_observed": observed, "database_bytes": self.path.stat().st_size, "clock_issues": sum(len(f["summary"].get("clock_issues", [])) for f in files), "sessions": files}
+        return {"files": len(files), "records": sum(f["summary"].get("records", 0) for f in files), "bytes": sum(f["size"] or 0 for f in files), "statistics": stats, "statistics_observed": observed, "database_bytes": self.path.stat().st_size, **self.disk(), "clock_issues": sum(len(f["summary"].get("clock_issues", [])) for f in files), "sessions": files}
 
 
 class SnapshotStore(Store):

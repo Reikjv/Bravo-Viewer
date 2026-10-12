@@ -4,6 +4,7 @@ O PC baixa os logs originais e os registros novos da coleta ao vivo e faz o
 processamento pesado localmente. A Raspberry só entrega arquivos.
 """
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -14,13 +15,12 @@ import subprocess
 import tempfile
 import threading
 import time
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 import webbrowser
 
 from . import __version__
 from .app import create_server
 from .blueos import validate_host
-from .ingest import append_records, import_file
 from .model import dumps
 from .service import Service
 
@@ -33,25 +33,34 @@ class RovClient:
     def __init__(self, host):
         self.base = f"http://{validate_host(host)}:{ROV_PORT}/api/"
 
-    def manifest(self):
-        with urlopen(self.base + "sync/manifest", timeout=15) as response:
+    def get(self, path, timeout=15):
+        with urlopen(self.base + path, timeout=timeout) as response:
             return json.load(response)
 
-    def original(self, file_id, destination):
-        with urlopen(f"{self.base}original?file={file_id}", timeout=60) as response, destination.open("wb") as output:
-            shutil.copyfileobj(response, output, 1048576)
+    def manifest(self):
+        return self.get("sync/manifest")
 
-    def records(self, file_id, after):
-        # Em partes: cada resposta tem no máximo 20.000 registros para não pesar no ROV.
-        while True:
-            with urlopen(f"{self.base}sync/records?file={file_id}&after={after}&limit=20000", timeout=120) as response:
-                lines = [line for line in response.read().splitlines() if line]
-            if not lines:
-                return
-            yield lines
-            after = json.loads(lines[-1])["seq"]
-            if len(lines) < 20000:
-                return
+    def meta(self, file_id):
+        return self.get(f"sync/meta?file={file_id}", timeout=60)
+
+    def original(self, file_id, partial, progress=lambda done: None):
+        """Baixa o log original continuando de um download parcial anterior."""
+        start = partial.stat().st_size if partial.exists() else 0
+        request = Request(f"{self.base}original?file={file_id}", headers={"Range": f"bytes={start}-"} if start else {})
+        with urlopen(request, timeout=60) as response:
+            mode = "ab" if response.status == 206 else "wb"
+            done = start if response.status == 206 else 0
+            with partial.open(mode) as output:
+                while chunk := response.read(1048576):
+                    output.write(chunk)
+                    done += len(chunk)
+                    progress(done)
+
+    def acknowledge(self, file_id, sha):
+        request = Request(self.base + "sync-ack", dumps({"file": file_id, "sha256": sha}).encode(),
+                          {"Content-Type": "application/json", "X-Reikjv-History": "1"})
+        with urlopen(request, timeout=15) as response:
+            return json.load(response)
 
 
 class Fleet:
@@ -123,35 +132,52 @@ class Fleet:
             for op in manifest["operations"]:
                 store.mirror_operation(op)
             with store.db() as db:
-                local = {row["source_key"]: dict(row) for row in db.execute("SELECT f.id,f.source_key,f.sha256,f.note,(SELECT coalesce(max(seq),-1) FROM records r WHERE r.file_id=f.id) AS last_seq FROM files f")}
+                local = {row["source_key"]: dict(row) for row in db.execute("SELECT source_key,sha256,path,remote_revision FROM files")}
+            # 1) Rápido: resumos, ocorrências e séries das sessões novas ou alteradas.
             changed = 0
             for index, remote in enumerate(manifest["files"]):
                 if self.stop.is_set():
                     return
-                state["message"] = f"Sincronizando {index + 1}/{len(manifest['files'])}: {remote['name']}"
                 mine = local.get(remote["source_key"])
-                if remote["kind"] == "live":
-                    if mine and mine["last_seq"] >= remote["last_seq"]:
-                        continue
-                    after = mine["last_seq"] if mine else -1
-                    added = sum(append_records(store, remote, lines) for lines in client.records(remote["id"], after))
-                    changed += bool(added)
+                if mine and mine["remote_revision"] == remote["imported_at"] and mine["sha256"] == remote["sha256"]:
                     continue
-                if mine and mine["sha256"] == remote["sha256"]:
-                    if mine["note"] != remote["note"]:
-                        store.note(mine["id"], remote["note"])
-                    continue
-                with tempfile.TemporaryDirectory(dir=self.directory) as temporary:
-                    path = Path(temporary) / ("original" + Path(remote["name"]).suffix.lower())
-                    client.original(remote["id"], path)
-                    result = import_file(store, path, remote["source_key"], display_name=remote["name"], operation_id=remote["operation_id"])
-                    if remote["note"]:
-                        store.note(result["id"], remote["note"])
+                state["message"] = f"Atualizando resumos {index + 1}/{len(manifest['files'])}"
+                store.apply_meta(remote, client.meta(remote["id"]))
                 changed += 1
             with self.lock:
                 device.update(equipment=manifest["equipment"], last_sync=time.time())
                 self.save()
-            state.update(online=True, error=None, message=f"Sincronizado · {changed} sessões atualizadas" if changed else "Sincronizado · sem novidades")
+            state.update(online=True, error=None)
+            # 2) Em segundo plano: logs originais, retomando cópias interrompidas.
+            with store.db() as db:
+                copied = {row["source_key"] for row in db.execute("SELECT source_key,path FROM files WHERE path!=''") if Path(row["path"]).is_file()}
+            pending = [f for f in manifest["files"] if f["kind"] != "live" and f["has_original"] and f["sha256"] and f["source_key"] not in copied]
+            total = sum(f["size"] or 0 for f in pending)
+            done = 0
+            downloads = self.directory / "downloads"
+            downloads.mkdir(exist_ok=True)
+            for index, remote in enumerate(pending):
+                if self.stop.is_set():
+                    return
+                partial = downloads / f"{remote['sha256']}.part"
+                base = done
+                def report(position, name=remote["name"], number=index + 1):
+                    state["message"] = f"Copiando logs completos {number}/{len(pending)} · {(base + position) * 100 // max(total, 1)}% · {name}"
+                client.original(remote["id"], partial, report)
+                with partial.open("rb") as file:
+                    if hashlib.file_digest(file, "sha256").hexdigest() != remote["sha256"]:
+                        partial.unlink()
+                        raise ValueError(f"Cópia de {remote['name']} corrompida; será baixada de novo.")
+                target = self.service(device_id).store.directory / "originals" / (remote["sha256"] + Path(remote["name"]).suffix.lower())
+                target.parent.mkdir(exist_ok=True)
+                partial.replace(target)
+                store.set_original(remote["source_key"], target.resolve())
+                client.acknowledge(remote["id"], remote["sha256"])
+                done += remote["size"] or 0
+            parts = [f"{changed} sessões atualizadas" if changed else "sem novidades"]
+            if pending:
+                parts.append(f"{len(pending)} logs completos copiados")
+            state.update(message="Sincronizado · " + ", ".join(parts))
         except Exception as error:
             state.update(online=False, error=str(error), message="ROV fora da rede" if isinstance(error, OSError) else str(error))
         finally:

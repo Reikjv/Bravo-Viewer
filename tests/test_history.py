@@ -77,20 +77,22 @@ class HistoryTests(HistoryFixture):
     def test_clock_jump_breaks_series(self):
         path = self.root / "clock.tlog"
         tlog(path, [(self.now, heartbeat(True)), (self.now+1, heartbeat(True)), (self.now+10000, heartbeat(True))])
-        import_file(self.store, path)
+        file_id = import_file(self.store, path)["id"]
         summary = self.store.files()[0]["summary"]
         self.assertEqual(1, len(summary["clock_issues"]))
         self.assertEqual(1, summary["armed_seconds"])
-        stream = self.store.streams()[0]
-        series = self.store.series(stream["id"], "base_mode")
-        self.assertEqual([0, 0, 1], [point["segment"] for point in series["points"]])
+        # O salto cai em intervalos de 10 s distantes; o gráfico interrompe a linha nessa lacuna.
+        times = [point["t"] for point in self.store.points(file_id, "armed")["points"]]
+        self.assertIn(len(times), (2, 3))
+        self.assertGreater(times[-1] - times[0], 9000)
 
     def test_armed_chart_uses_bit_not_entire_mode(self):
-        import_file(self.store, self.make_file())
-        stream = next(s for s in self.store.streams() if s["type"] == "HEARTBEAT")
-        self.assertEqual([0, 1, 1, 0], [point["value"] for point in self.store.series(stream["id"], "_armed")["points"]])
-        other = next(s for s in self.store.streams() if s["type"] == "PARAM_VALUE")
-        with self.assertRaises(ValueError): self.store.series(other["id"], "_armed")
+        file_id = import_file(self.store, self.make_file())["id"]
+        points = self.store.points(file_id, "armed")["points"]
+        # base_mode 128 marca armado; outros bits do modo não contam.
+        self.assertEqual((0, 1), (min(p["min"] for p in points), max(p["max"] for p in points)))
+        self.assertIn("armed", [m["metric"] for m in self.store.metrics(file_id)])
+        with self.assertRaises(ValueError): self.store.points(file_id, "base_mode")
 
     def test_capability_grid_separates_scope_and_observed_data(self):
         path = self.root / "attitude.tlog"

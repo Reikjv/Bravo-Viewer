@@ -90,6 +90,24 @@ def create_server(service, host="127.0.0.1", port=8090, extension=None):
             for chunk in chunks:
                 self.wfile.write(chunk)
 
+        def send_file(self, filepath, name):
+            """Download com retomada (Range): uma cópia interrompida continua de onde parou."""
+            size = filepath.stat().st_size
+            match = re.fullmatch(r"bytes=(\d+)-", self.headers.get("Range", ""))
+            start = int(match[1]) if match and int(match[1]) < size else 0
+            self.send_response(206 if start else 200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Disposition", f'attachment; filename="{name}"')
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Length", str(size - start))
+            if start:
+                self.send_header("Content-Range", f"bytes {start}-{size - 1}/{size}")
+            self.end_headers()
+            with filepath.open("rb") as source:
+                source.seek(start)
+                while chunk := source.read(1048576):
+                    self.wfile.write(chunk)
+
         def routes(self):
             parsed = urlparse(self.path)
             path = parsed.path.rstrip("/")
@@ -114,9 +132,8 @@ def create_server(service, host="127.0.0.1", port=8090, extension=None):
                 return self.response({"operations": service.store.operations(), "limit": service.store.operation_limit()})
             if path == "/api/sync/manifest":
                 return self.response(service.store.sync_manifest())
-            if path == "/api/sync/records":
-                rows = service.store.records_after(integer("file"), int(query.get("after", ["-1"])[0]), integer("limit", 20000))
-                return self.download(rows, "registros.jsonl", "application/x-ndjson")
+            if path == "/api/sync/meta":
+                return self.response(service.store.file_meta(integer("file")))
             if path == "/api/files":
                 return self.response(service.store.files())
             if path == "/api/streams":
@@ -128,11 +145,13 @@ def create_server(service, host="127.0.0.1", port=8090, extension=None):
                 return self.response(json.loads(inventory.read_text(encoding="utf-8")) if inventory.exists() else {"files": [], "errors": [], "captured_at": None, "host": None})
             if path == "/api/records":
                 return self.response(service.store.records(integer("stream"), integer("offset"), integer("limit", 100)))
+            if path == "/api/metrics":
+                return self.response(service.store.metrics(integer("file")))
             if path == "/api/series":
                 if not service.heavy_queries.acquire(blocking=False):
                     return self.response({"error": "Consultas em andamento; tente novamente em alguns segundos"}, 503)
                 try:
-                    return self.response(service.store.series(integer("stream"), query.get("field", [""])[0], integer("points", 700), query.get("normalized", ["1"])[0] != "0"))
+                    return self.response(service.store.points(integer("file"), query.get("metric", [""])[0]))
                 finally:
                     service.heavy_queries.release()
             if path == "/api/events":
@@ -165,11 +184,7 @@ def create_server(service, host="127.0.0.1", port=8090, extension=None):
                 originals = (service.store.directory / "originals").resolve()
                 if not filepath.is_file() or not filepath.is_relative_to(originals):
                     raise ValueError("Original indisponível para coleta ao vivo; exporte os tipos")
-                def chunks():
-                    with filepath.open("rb") as source:
-                        while chunk := source.read(65536):
-                            yield chunk
-                return self.download(chunks(), f"bravo-viewer-original-{file['id']}{filepath.suffix}", "application/octet-stream")
+                return self.send_file(filepath, f"bravo-viewer-original-{file['id']}{filepath.suffix}")
             if extension and path.startswith("/api/desktop/"):
                 return self.response(extension.get(path[len("/api/desktop/"):], query))
             if path.startswith("/api/"):
@@ -239,6 +254,8 @@ def create_server(service, host="127.0.0.1", port=8090, extension=None):
                 if action == "bundle":
                     from .exporter import validate_context
                     return self.response(service.submit("bundle", context=validate_context(body)), 202)
+                if action == "sync-ack":
+                    return self.response({"released": service.store.acknowledge_copy(int(body["file"]), str(body["sha256"]))})
                 if action == "operation":
                     return self.response(service.store.update_operation(body))
                 if action == "operation-close":

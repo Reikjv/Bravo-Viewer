@@ -2,7 +2,7 @@
 # Instala somente o contêiner de histórico; preserva o volume e a versão anterior.
 set -Eeuo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
-VERSION="0.4.2-beta.1"
+VERSION="0.5.0-beta.1"
 IMAGE="bravo-viewer:$VERSION"
 NAME="bravo-viewer"
 DATA="/usr/blueos/extensions/reikjv-rov-history"

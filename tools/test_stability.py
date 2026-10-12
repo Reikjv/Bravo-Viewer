@@ -56,12 +56,11 @@ def main():
     server_thread = threading.Thread(target=server.serve_forever, daemon=True); server_thread.start()
     base = 'http://127.0.0.1:' + str(server.server_port)
     streams = service.store.streams()
-    numeric = [s for s in streams if s['type'] == 'SYS_STATUS' and s['origin'] == '1:1']
-    endpoints = ['/health', '/api/status', '/api/overview', '/api/files', '/api/streams', '/api/events?limit=100']
+    endpoints = ['/health', '/api/status', '/api/overview', '/api/files', '/api/streams', '/api/events?limit=100', '/api/operations']
     if streams: endpoints.append('/api/records?stream=' + str(streams[0]['id']))
-    for stream in numeric:
-        for field in ('voltage_battery', 'current_battery'):
-            endpoints.append('/api/series?stream=' + str(stream['id']) + '&field=' + field)
+    for file in service.store.files():
+        for metric in service.store.metrics(file['id']):
+            endpoints.append(f"/api/series?file={file['id']}&metric={metric['metric']}")
     results, health_times, memory, errors = Counter(), [], [], []
     lock = threading.Lock(); end = time.monotonic() + args.seconds
     def client(index):

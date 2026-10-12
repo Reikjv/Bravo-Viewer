@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 import json
+from pathlib import Path
 import threading
 
 from rov_history import desktop
@@ -37,8 +38,8 @@ class DesktopSyncTests(HistoryFixture):
         self.assertEqual(first, Store(self.root / "rov").config()["device_id"])
         self.assertNotIn("device_id", Store(self.root / "mirror", mirror=True).config())
 
-    def test_pc_copies_originals_operations_and_new_live_records(self):
-        import_file(self.rov.store, self.make_file(), "blueos:127.0.0.1:logs/00001.tlog")
+    def test_pc_gets_summaries_series_and_original_logs(self):
+        tlog_id = import_file(self.rov.store, self.make_file(), "blueos:127.0.0.1:logs/00001.tlog")["id"]
         self.rov.ingest_live(live_cache(1))
         self.rov.store.update_operation({"name": "Casco", "location": "Santos"})
         device = self.fleet.connect("127.0.0.1")
@@ -46,15 +47,39 @@ class DesktopSyncTests(HistoryFixture):
         local = self.local(device)
         self.assertEqual("Bravo 10", local.config()["equipment"])
         self.assertEqual(["Casco"], [op["name"] for op in local.operations()])
-        remote_counts = {f["source_key"]: f["summary"]["records"] for f in self.rov.store.files()}
-        self.assertEqual(remote_counts, {f["source_key"]: f["summary"]["records"] for f in local.files()})
-        # Coleta ao vivo: somente os registros novos são buscados, sem duplicar.
+        remote = {f["source_key"]: f["summary"]["records"] for f in self.rov.store.files()}
+        self.assertEqual(remote, {f["source_key"]: f["summary"]["records"] for f in local.files()})
+        mine = next(f for f in local.files() if f["kind"] == "tlog")
+        self.assertEqual(self.rov.store.points(tlog_id, "armed"), local.points(mine["id"], "armed"))
+        # O log original foi copiado, conferido e confirmado ao ROV; o inventário relê o original no PC.
+        stream = next(s for s in local.streams() if s["type"] == "STATUSTEXT")
+        self.assertEqual("=unsafe-text", local.records(stream["id"])["rows"][0]["data"]["text"])
+        self.assertIsNotNone(self.rov.store.file(tlog_id)["pc_copied_at"])
+        # Coleta ao vivo: o resumo acompanha as amostras novas sem copiar mensagem a mensagem.
         self.rov.ingest_live(live_cache(2))
         self.fleet.sync(device)
-        live = [f for f in local.files() if f["kind"] == "live"][0]
-        with local.db() as db:
-            self.assertEqual(2, db.execute("SELECT count(*) FROM records WHERE file_id=?", (live["id"],)).fetchone()[0])
+        live = next(f for f in local.files() if f["kind"] == "live")
+        self.assertEqual(2, live["summary"]["records"])
         self.assertIn("Sincronizado", self.fleet.state[device]["message"])
+
+    def test_interrupted_copy_resumes_and_rov_releases_closed_logs(self):
+        tlog_id = import_file(self.rov.store, self.make_file(), "blueos:a")["id"]
+        original = self.rov.store.file(tlog_id)
+        device = self.fleet.connect("127.0.0.1")
+        partial = self.root / "pc" / "downloads"
+        partial.mkdir(parents=True)
+        data = Path(original["path"]).read_bytes()
+        (partial / (original["sha256"] + ".part")).write_bytes(data[:10])
+        self.fleet.sync(device)
+        local = next(f for f in self.local(device).files() if f["source_key"] == "blueos:a")
+        self.assertEqual(data, Path(self.local(device).file(local["id"])["path"]).read_bytes())
+        # Operação ainda aberta: o ROV mantém o log mesmo com a cópia confirmada.
+        self.assertTrue(Path(original["path"]).is_file())
+        self.rov.store.close_operation()
+        self.assertEqual(1, self.rov.store.release_originals())
+        self.assertEqual("", self.rov.store.file(tlog_id)["path"])
+        # Resumo e gráficos continuam no ROV depois de liberar o log.
+        self.assertTrue(self.rov.store.points(tlog_id, "armed")["points"])
 
     def test_pc_keeps_operations_removed_from_rov(self):
         import_file(self.rov.store, self.make_file(), "blueos:a")

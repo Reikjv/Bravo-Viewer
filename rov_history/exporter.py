@@ -14,12 +14,6 @@ from . import __version__
 from .capabilities import capabilities
 from .model import dumps, flatten
 
-INDICATORS = {
-    "SYS_STATUS": {"voltage_battery": "Tensão", "current_battery": "Corrente"},
-    "BATTERY_STATUS": {"current_consumed": "Consumo acumulado", "energy_consumed": "Energia acumulada"},
-    "BAT": {"Volt": "Tensão", "Curr": "Corrente", "CurrTot": "Consumo acumulado", "EnrgTot": "Energia acumulada"},
-    "HEARTBEAT": {"_armed": "Estado armado"},
-}
 TABS = {"overview", "operations", "sessions", "charts", "events", "explorer", "files", "capabilities", "settings"}
 
 
@@ -77,36 +71,40 @@ def report_table(headers, rows):
 
 
 def chart_svg(series, label):
+    """Faixa mínimo–máximo e linha da média por intervalo; lacunas maiores que 3 intervalos interrompem."""
     points = series["points"]
-    valid = [p for p in points if p["value"] is not None]
-    if not valid:
+    if not points:
         return '<p>Sem medições numéricas válidas.</p>'
-    lo, hi = min(p["value"] for p in valid), max(p["value"] for p in valid)
+    lo, hi = min(p["min"] for p in points), max(p["max"] for p in points)
     pad = max((hi - lo) * .1, abs(hi) * .002, .001)
     lower, upper = lo - pad, hi + pad
-    first, last = points[0]["seq"], points[-1]["seq"]
-    segments, segment, previous = [], [], None
-    for p in points:
-        if p["value"] is None or previous and p["segment"] != previous["segment"]:
-            if segment:
-                segments.append(segment); segment = []
-            previous = None
-        if p["value"] is None:
-            continue
-        x, y = 65 + (p["seq"] - first) / (last - first or 1) * 680, 18 + (upper - p["value"]) / (upper - lower) * 195
-        if previous and series["field"] == "_armed":
-            segment.append((x, segment[-1][1]))
-        segment.append((x, y))
-        previous = p
+    first, last = points[0]["t"], points[-1]["t"]
+    x = lambda t: 65 + (t - first) / (last - first or 1) * 680
+    y = lambda v: 18 + (upper - v) / (upper - lower) * 195
+    segments, segment = [], []
+    for index, point in enumerate(points):
+        if segment and point["t"] - points[index - 1]["t"] > 3 * series["seconds"]:
+            segments.append(segment); segment = []
+        segment.append(point)
     if segment:
         segments.append(segment)
-    coords = lambda seg: " L".join(f"{x:.2f},{y:.2f}" for x, y in seg)
-    # Área sob cada trecho contínuo; o gradiente é declarado uma vez no relatório.
-    areas = ''.join(f'<path d="M{seg[0][0]:.2f},213 L{coords(seg)} L{seg[-1][0]:.2f},213 Z" fill="url(#bv-area)"/>' for seg in segments)
-    lines = ''.join(f'<path d="M{coords(seg)}" fill="none" stroke="#217987" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>' for seg in segments)
+    step = series["metric"] == "armed"
+    bands, lines = [], []
+    for seg in segments:
+        top = " L".join(f"{x(p['t']):.2f},{y(p['max']):.2f}" for p in seg)
+        bottom = " L".join(f"{x(p['t']):.2f},{y(p['min']):.2f}" for p in reversed(seg))
+        bands.append(f'<path d="M{top} L{bottom} Z" fill="url(#bv-area)"/>')
+        coords = []
+        for index, p in enumerate(seg):
+            if step and index:
+                coords.append(f"{x(p['t']):.2f},{y(seg[index - 1]['avg']):.2f}")
+            coords.append(f"{x(p['t']):.2f},{y(p['avg']):.2f}")
+        lines.append(f'<path d="M{" L".join(coords)}" fill="none" stroke="#217987" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>')
     grid = ''.join(f'<line x1="65" x2="745" y1="{18 + i * 195 / 4:.1f}" y2="{18 + i * 195 / 4:.1f}" stroke="#d6e5e8" stroke-dasharray="3 5"/>' for i in range(5))
     e = html.escape
-    return f'<svg viewBox="0 0 780 250" role="img" aria-label="{e(label)}"><rect width="780" height="250" rx="14" fill="#f4f9fa"/>{grid}<text x="8" y="24">{hi:.4g}</text><text x="8" y="210">{lo:.4g}</text>{areas}{lines}<text x="65" y="238">Registro {first} → {last} · {e(series["unit"])}</text></svg>'
+    return (f'<svg viewBox="0 0 780 250" role="img" aria-label="{e(label)}"><rect width="780" height="250" rx="14" fill="#f4f9fa"/>{grid}'
+            f'<text x="8" y="24">{hi:.4g}</text><text x="8" y="210">{lo:.4g}</text>{"".join(bands)}{"".join(lines)}'
+            f'<text x="65" y="238">{e(utc(first))} → {e(utc(last))} · {e(series["unit"])} · média, mínimo e máximo a cada {series["seconds"]} s</text></svg>')
 
 
 def duration_text(seconds):
@@ -183,7 +181,7 @@ def build_bundle(store, identifier, context, progress=lambda text, percent=None:
                 if tab in ("settings", "capabilities"):
                     files = []
                 streams = [s for s in streams if s["file_id"] in {f["id"] for f in files}]
-                if tab in ("charts", "explorer"):
+                if tab == "explorer":
                     streams = [s for s in streams if s["id"] == context["stream"]]
                     if not streams:
                         raise ValueError("Selecione uma origem com dados antes de exportar esta visão")
@@ -194,9 +192,10 @@ def build_bundle(store, identifier, context, progress=lambda text, percent=None:
             def add_json(name, value):
                 archive.writestr(root + name, dumps(value) + "\n")
             raw_streams = streams if all_scope else streams if tab == "explorer" else []
-            chart_streams = streams if all_scope or tab in ("charts", "overview", "sessions") else []
+            chart_files = files if all_scope or tab in ("charts", "overview", "sessions") else []
+            # Séries de 10 s são pequenas; o peso real está nas tabelas completas e nos originais.
             work["total"] = max(1, sum(s["count"] * 2 for s in raw_streams) * context["include_data"]
-                                + sum(s["count"] * (1 + context["include_data"] * len(INDICATORS[s["type"]])) for s in chart_streams if s["type"] in INDICATORS)
+                                + 1000 * len(chart_files)
                                 + (sum(f["size"] or 0 for f in files) // 200 if context["include_originals"] else 0))
             advance(0, "Resumo e ocorrências")
             if operation:
@@ -238,6 +237,10 @@ def build_bundle(store, identifier, context, progress=lambda text, percent=None:
             if context["include_data"]:
                 for index, stream in enumerate(raw_streams):
                     check(); advance(0, f"Dados completos: {index + 1}/{len(raw_streams)} tipos/origens")
+                    if not snap.raw_available(stream):
+                        # Coleta ao vivo e logs já transferidos ao PC não têm mensagens completas aqui.
+                        advance(stream["count"] * 2)
+                        continue
                     readable = re.sub(r'[^a-zA-Z0-9_.-]', '_', stream['type'] + '_' + stream['origin'])[:100]
                     folder = f"dados/sessao_{stream['file_id']:06d}/tipo_{stream['id']:06d}_{readable}"
                     fields = stream["fields"]
@@ -248,54 +251,28 @@ def build_bundle(store, identifier, context, progress=lambda text, percent=None:
                     elif not all_scope and context["search"]:
                         fields = [f for f in fields if context["search"].lower() in f.lower()]
                     def raw_rows():
-                        with snap.db() as db:
-                            for row in db.execute("SELECT seq,ts,segment,data FROM records WHERE stream_id=? ORDER BY seq", (stream["id"],)):
-                                values = flatten(json.loads(row["data"]))
-                                yield [row["seq"], utc(row["ts"]), row["segment"], *[values.get(f, "") for f in fields]]
+                        for seq, ts, segment, data in snap.stream_rows(stream):
+                            values = flatten(data)
+                            yield [seq, utc(ts), segment, *[values.get(f, "") for f in fields]]
                     write_csv(archive, root + folder + ".csv", ["Sequência", "Data UTC", "Trecho", *fields], counted(raw_rows()), check)
+                    written = 0
                     with archive.open(root + folder + ".jsonl", "w", force_zip64=True) as output:
-                        for index, chunk in enumerate(snap.export(stream["id"], "jsonl")):
-                            if index % 1000 == 0: check()
+                        for written, chunk in enumerate(snap.export(stream["id"], "jsonl"), 1):
+                            if written % 1000 == 0: check()
                             output.write(chunk)
                     advance(stream["count"])
-                    manifest["entries"].append({"type": stream["type"], "origin": stream["origin"], "session": stream["file_id"], "records": stream["count"], "csv": folder + ".csv", "jsonl": folder + ".jsonl", "csv_fields": fields})
-            for stream in chart_streams:
-                if stream["type"] not in INDICATORS or not (stream["origin"] == "1:1" or stream["kind"] == "bin"):
-                    continue
-                fields = INDICATORS[stream["type"]]
-                if not all_scope and tab == "charts":
-                    if context["field"] not in fields:
-                        raise ValueError("Indicador não disponível nesta visão")
-                    fields = {context["field"]: fields.get(context["field"], context["field"])}
-                for field, label in fields.items():
-                    if field != "_armed" and field not in stream["fields"]:
+                    manifest["entries"].append({"type": stream["type"], "origin": stream["origin"], "session": stream["file_id"], "records": written, "csv": folder + ".csv", "jsonl": folder + ".jsonl", "csv_fields": fields})
+            for file in chart_files:
+                for metric in snap.metrics(file["id"]):
+                    if not all_scope and tab == "charts" and context["field"] and context["field"] != metric["metric"]:
                         continue
-                    check(); advance(0, f"Gráficos e séries: {stream['file_name']} · {label}")
-                    normalized = context["normalized"] if tab == "charts" and not all_scope else True
-                    series = snap.series(stream["id"], field, 350, normalized)
-                    advance(stream["count"] // max(1, len(fields)))
-                    filename = f"energia/sessao_{stream['file_id']:06d}_tipo_{stream['id']:06d}_{field}.csv"
-                    def measured_rows():
-                        with snap.db() as db:
-                            for row in db.execute("SELECT seq,ts,segment,data FROM records WHERE stream_id=? ORDER BY seq", (stream["id"],)):
-                                data = json.loads(row["data"])
-                                raw = flatten(data).get(field)
-                                measure = snap.catalog.measure(stream["kind"], stream["type"], field, raw, data)
-                                if field == "_armed":
-                                    mode = data.get("base_mode", 0)
-                                    if isinstance(mode, dict): mode = mode.get("bits", 0)
-                                    raw = int(bool(mode & 128))
-                                    measure = {"value": raw, "valid": True}
-                                if stream["kind"] == "bin":
-                                    measure = {"value": raw, "valid": raw is not None}
-                                value = (measure["value"] if normalized else raw) if measure["valid"] else None
-                                yield [row["seq"], utc(row["ts"]), row["segment"], value, raw, series["unit"]]
-                    link = ""
-                    # Sem tabelas completas, o gráfico basta; a série CSV seria uma segunda leitura.
-                    if context["include_data"]:
-                        write_csv(archive, root + filename, ["Sequência", "Data UTC", "Trecho", label, "Valor registrado", "Unidade exibida"], counted(measured_rows()), check)
-                        link = f'<a href="{filename}">Série completa CSV</a>'
-                    charts_html.append(f'<article><h3>{html.escape(label)} · {html.escape(stream["file_name"])}</h3>{chart_svg(series, label)}{link}</article>')
+                    check(); advance(0, f"Gráficos: {file['name']} · {metric['label']}")
+                    series = snap.points(file["id"], metric["metric"])
+                    filename = f"energia/sessao_{file['id']:06d}_{metric['metric']}.csv"
+                    write_csv(archive, root + filename, ["Início UTC", "Mínimo", "Máximo", "Média", "Unidade"],
+                              ([utc(p["t"]), p["min"], p["max"], p["avg"], series["unit"]] for p in series["points"]), check)
+                    charts_html.append(f'<article><h3>{html.escape(metric["label"])} · {html.escape(file["name"])}</h3>{chart_svg(series, metric["label"])}<a href="{filename}">Série CSV (10 s)</a></article>')
+                advance(1000)
             if context["include_originals"]:
                 for file in files:
                     check()
@@ -331,7 +308,7 @@ def build_bundle(store, identifier, context, progress=lambda text, percent=None:
             report = report.replace('<h1>Bravo Viewer</h1>', '<img src="assets/brs.png" alt="BRS" style="width:110px"><h1>Bravo Viewer</h1>')
             report = report.replace('<footer>Bravo Viewer', '<footer><img src="assets/brand.png" alt="Reikjv" style="width:40px;vertical-align:middle;margin-right:10px">Bravo Viewer')
             archive.writestr(root + "relatorio.html", report)
-            archive.writestr(root + "LEIA-ME.txt", "Bravo Viewer\nExtraia o ZIP e abra relatorio.html no navegador.\nresumo: sessões, contadores e observações salvas.\nenergia: séries completas nas unidades de leitura.\nocorrencias: todas as mensagens correspondentes aos filtros.\ninventario: tipos/campos, arquivos BlueOS e possibilidades.\ndados: CSV por tipo/origem e JSONL preservando os campos brutos completos.\noriginais: arquivos opcionais; coletas de API não possuem original binário.\nCSV protege textos que poderiam ser executados como fórmula; JSONL preserva esses textos.\nA exportação usa um instantâneo consistente da base local. O inventário remoto representa a última consulta.\nDatas ausentes permanecem vazias. Tempos armados incluem bancada, e lacunas não contam como operação contínua.\n")
+            archive.writestr(root + "LEIA-ME.txt", "Bravo Viewer\nExtraia o ZIP e abra relatorio.html no navegador.\nresumo: sessões, contadores e observações salvas.\nenergia: séries completas nas unidades de leitura.\nocorrencias: todas as mensagens correspondentes aos filtros.\ninventario: tipos/campos, arquivos BlueOS e possibilidades.\ndados: CSV por tipo/origem e JSONL preservando os campos brutos completos.\noriginais: arquivos opcionais; coletas de API não possuem original binário.\ndados: tabelas completas relidas do log original; coletas ao vivo trazem resumo, ocorrências e séries de 10 s em energia/.\nCSV protege textos que poderiam ser executados como fórmula; JSONL preserva esses textos.\nA exportação usa um instantâneo consistente da base local. O inventário remoto representa a última consulta.\nDatas ausentes permanecem vazias. Tempos armados incluem bancada, e lacunas não contam como operação contínua.\n")
             add_json("manifest.json", manifest)
         temporary.replace(target)
         # Mantém apenas cinco pacotes concluídos; logs e originais não são removidos.

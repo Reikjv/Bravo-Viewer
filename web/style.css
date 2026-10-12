@@ -236,3 +236,4 @@ body.desktop .rov-only{display:none!important}
 .fleet-status{flex:1;min-width:200px}
 .fleet-status strong{display:block;font-size:13px;color:var(--light)}
 .fleet-status small{color:var(--muted);font-size:11px}
+.chart-filters{grid-template-columns:repeat(2,minmax(0,1fr))}
