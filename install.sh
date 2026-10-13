@@ -2,7 +2,7 @@
 # Instala somente o contêiner de histórico; preserva o volume e a versão anterior.
 set -Eeuo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
-VERSION="0.8.0-beta.1"
+VERSION="0.8.1-beta.1"
 IMAGE="bravo-viewer:$VERSION"
 NAME="bravo-viewer"
 DATA="/usr/blueos/extensions/reikjv-rov-history"
@@ -43,8 +43,7 @@ rollback() {
 trap rollback ERR
 docker run -d --name "$NAME" --label "org.reikjv.history.install=$INSTALL_ID" \
   --restart unless-stopped --network host --memory 256m --cpus .5 \
-  -v "$DATA:/data" -v /root/.config/blueos/ardupilot-manager/logs:/blueos/ardupilot_logs/logs:ro \
-  -v /var/logs/blueos/services:/blueos/system_logs:ro "$IMAGE"
+  -v "$DATA:/data" -v /root/.config/blueos/ardupilot-manager/logs:/blueos/ardupilot_logs/logs:ro "$IMAGE"
 HEALTHY=false
 for attempt in {1..30}; do
   if docker exec "$NAME" python -c 'import json,urllib.request; from rov_history import __version__; assert json.load(urllib.request.urlopen("http://127.0.0.1:8090/health",timeout=2))["version"] == __version__' >/dev/null 2>&1; then HEALTHY=true; break; fi

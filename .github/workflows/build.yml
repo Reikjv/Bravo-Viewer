@@ -32,6 +32,10 @@ jobs:
             sleep 1
           done
           node tools/test_frontend.cjs http://127.0.0.1:18090/
+      - name: Supabase schema
+        run: |
+          npm install --prefix .tooling/supabase-validation --no-save --package-lock=false @electric-sql/pglite@0.3.14
+          node tools/test_supabase_schema.cjs
   build:
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     needs: test

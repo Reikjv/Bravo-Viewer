@@ -2,7 +2,7 @@
 
 <img src="catalog/card.png" alt="Bravo Viewer · BRS" width="320">
 
-Extensão BlueOS para consultar o histórico do ROV: horas, operações, energia, ocorrências, gráficos e inventário de tipos/campos. **Beta 0.8.0-beta.1**, desenvolvida para testes com BlueOS 1.4.6, ArduSub 4.7.1 e Navigator.
+Extensão BlueOS para consultar o histórico do ROV: horas, operações, energia, ocorrências, gráficos e inventário de tipos/campos. **Beta 0.8.1-beta.1**, desenvolvida para testes com BlueOS 1.4.6, ArduSub 4.7.1 e Navigator.
 
 ## Instalação
 
@@ -15,16 +15,16 @@ No gerenciador de **Extensões do BlueOS**, abra as configurações de fontes/re
 https://raw.githubusercontent.com/Reikjv/Bravo-Viewer/main/manifest.json
 ```
 
-Ative a fonte, procure **Bravo Viewer** e selecione a versão **0.8.0-beta.1**. Habilite versões de desenvolvimento/beta se necessário. O BlueOS escolhe ARM64 ou ARMv7 e baixa `ghcr.io/reikjv/bravo-viewer:0.8.0-beta.1`. É preciso acesso à internet durante o download; o painel funciona localmente após a instalação.
+Ative a fonte, procure **Bravo Viewer** e selecione a versão **0.8.1-beta.1**. Habilite versões de desenvolvimento/beta se necessário. O BlueOS escolhe ARM64 ou ARMv7 e baixa `ghcr.io/reikjv/bravo-viewer:0.8.1-beta.1`. É preciso acesso à internet durante o download; o painel funciona localmente após a instalação.
 
 O catálogo usa o suporte a fontes externas do BlueOS. A extensão não foi incluída no catálogo oficial. Consulte a [documentação do BlueOS](https://blueos.cloud/docs/stable/development/extensions/).
 
 ## Instaladores offline
 
-Baixe nas [releases](https://github.com/Reikjv/Bravo-Viewer/releases/tag/v0.8.0-beta.1):
+Baixe nas [releases](https://github.com/Reikjv/Bravo-Viewer/releases/tag/v0.8.1-beta.1):
 
-- [ARM64](https://github.com/Reikjv/Bravo-Viewer/releases/download/v0.8.0-beta.1/Bravo-Viewer-v0.8.0-beta.1-arm64.zip)
-- [ARMv7](https://github.com/Reikjv/Bravo-Viewer/releases/download/v0.8.0-beta.1/Bravo-Viewer-v0.8.0-beta.1-armv7.zip)
+- [ARM64](https://github.com/Reikjv/Bravo-Viewer/releases/download/v0.8.1-beta.1/Bravo-Viewer-v0.8.1-beta.1-arm64.zip)
+- [ARMv7](https://github.com/Reikjv/Bravo-Viewer/releases/download/v0.8.1-beta.1/Bravo-Viewer-v0.8.1-beta.1-armv7.zip)
 
 Confira o checksum `.zip.sha256`. Extraia o pacote no BlueOS e execute `bash install.sh` na pasta extraída. O instalador confere arquitetura e hashes, carrega a imagem incluída e preserva o volume em atualizações. A arquitetura relevante é a do **servidor Docker**, consultável com `docker version --format '{{.Server.Arch}}'`.
 
@@ -32,7 +32,7 @@ Escolha somente um método de instalação. Gerenciador e script offline usam a 
 
 ## Uso e exportação
 
-Abra a extensão no BlueOS ou `http://IP_DO_BLUEOS:8090/`. Em Configuração, identifique o equipamento e confira a coleta. A primeira instalação inicia a coleta automática; o backend continua coletando quando a tela fecha. **Buscar no BlueOS** consulta os logs existentes, incluindo o inventário de arquivos vazios. A busca roda em fila própria e não atrasa exportações. Arquivos ainda em gravação não são reimportados a cada busca: o log de voo da inicialização atual entra depois que o ROV reinicia (a coleta ao vivo cobre esse intervalo) e logs de serviço entram após 10 minutos sem alteração. O ZIP do **Exportar Viewer** é leve por padrão; tabelas completas CSV/JSONL são opcionais. Também é possível importar `.tlog`, `.bin`, `.log` e `.gz`.
+Abra a extensão no BlueOS ou `http://IP_DO_BLUEOS:8090/`. Em Configuração, identifique o equipamento e confira a coleta. A primeira instalação inicia a coleta automática; o backend continua coletando quando a tela fecha. **Buscar no BlueOS** indexa os logs de voo novos (também é feito sozinho a cada 5 minutos, em fila própria). O log da inicialização atual entra depois que o ROV reinicia; a coleta ao vivo cobre esse intervalo. O ZIP do **Exportar Viewer** é leve por padrão; tabelas completas CSV/JSONL são opcionais. Também é possível importar `.tlog` e `.bin` manualmente.
 
 ### Operações
 
@@ -69,7 +69,7 @@ O histórico considera só os logs de voo (`.tlog`/`.bin`). Os logs internos dos
 
 ## Logs lidos direto do BlueOS
 
-A partir da 0.6 o Bravo Viewer lê os `.tlog`/`.bin` e os logs de serviços **onde o BlueOS os grava**, montados somente leitura no contêiner (`/root/.config/blueos/ardupilot-manager/logs` e `/var/logs/blueos/services`). Nada é baixado nem copiado: cada log é indexado uma vez (resumo, ocorrências, séries de 10 s) e relido sob demanda. Na atualização, as cópias feitas pelas versões anteriores são trocadas pelo log original e removidas. O Bravo nunca apaga nem altera logs do BlueOS.
+O Bravo Viewer lê os logs de voo (`.tlog`/`.bin`) **onde o BlueOS os grava** (`/root/.config/blueos/ardupilot-manager/logs`), montados somente leitura no contêiner. Nada é baixado nem copiado: cada log é indexado uma vez (resumo, ocorrências, séries de 10 s) e relido sob demanda. O Bravo nunca apaga nem altera logs do BlueOS.
 
 ## Bravo Viewer Desktop (Windows 11)
 
@@ -97,13 +97,13 @@ Nome, local e encerramento da operação são feitos no Bravo Viewer do ROV; no 
 ## Limites da beta
 
 - Tempo armado inclui bancada. Lacunas de mais de cinco segundos não contam como operação contínua.
-- Contadores podem ser reiniciados. Cada arquivo ou coleta diária UTC é uma sessão; arquivos sobrepostos não são somados.
+- Contadores podem ser reiniciados. Cada inicialização do ROV (log de voo) ou coleta diária é uma sessão, agrupada na operação aberta; fontes que registram a mesma telemetria não são somadas.
 - Ah/Wh são acumuladores registrados; não há estimativa para preencher dados ausentes. Sentinelas desconhecidas não são apresentadas como medições válidas.
-- A API é amostrada e não captura todas as mensagens MAVLink transmitidas. O inventário de arquivos cobre as pastas consultadas de autopiloto/serviços, não todos os volumes privados de outras extensões.
+- A coleta ao vivo é amostrada; o log de voo é a fonte completa. Logs internos dos serviços do BlueOS não fazem parte do histórico.
 - Histórico/originais persistem em `/usr/blueos/extensions/reikjv-rov-history`; acompanhe o espaço livre. Sessões fora do limite de operações são removidas automaticamente; sessões sem operação (logs anteriores à operação aberta) são preservadas. Apenas os cinco ZIPs exportados mais recentes são mantidos; o ZIP de uma operação guardada pode ser gerado de novo.
 - Recursos do contêiner: 256 MiB e 0,5 CPU. Consultas pesadas podem informar ocupação; tente novamente após alguns segundos.
 
-Os testes locais incluíram 1.054.950 registros, oito clientes, exportação simultânea e coleta simulada por cinco minutos: banco e ZIP íntegros, sem falhas inesperadas e pico de memória de 64,5 MiB. Esse ensaio no computador não garante desempenho nem estabilidade prolongada no Navigator. A validação física deve conferir operação representativa, horas de coleta, reinício, rede e espaço disponível.
+Os testes locais incluíram 1.054.950 registros, oito clientes, exportação simultânea e coleta simulada: banco e ZIP íntegros, sem falhas e pico de memória de 81 MB no formato compacto. Esse ensaio no computador não garante desempenho nem estabilidade prolongada no Navigator. A validação física deve conferir operação representativa, horas de coleta, reinício, rede e espaço disponível.
 
 Este repositório contém o código da extensão, catálogo, testes e documentação de uso; as releases incluem os instaladores. Os logs de teste não estão incluídos. As dependências de terceiros conservam suas licenças na imagem.
 

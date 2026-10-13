@@ -19,7 +19,7 @@ def catalog(metadata):
         info = metadata[arch]
         if not re.fullmatch(r'sha256:[a-f0-9]{64}', info['digest']): raise ValueError('Digest inválido')
         images.append({'expanded_size':info['size'], 'digest':info['digest'], 'platform':{'architecture':'arm' if arch == 'armv7' else arch,'variant':'v7' if arch == 'armv7' else None,'os':'linux'}})
-    permissions = {'HostConfig':{'NetworkMode':'host','Memory':268435456,'NanoCpus':500000000,'Binds':['/usr/blueos/extensions/reikjv-rov-history:/data','/root/.config/blueos/ardupilot-manager/logs:/blueos/ardupilot_logs/logs:ro','/var/logs/blueos/services:/blueos/system_logs:ro']}}
+    permissions = {'HostConfig':{'NetworkMode':'host','Memory':268435456,'NanoCpus':500000000,'Binds':['/usr/blueos/extensions/reikjv-rov-history:/data','/root/.config/blueos/ardupilot-manager/logs:/blueos/ardupilot_logs/logs:ro']}}
     version = {'tag':__version__,'type':'tool','images':images,
                'authors':[{'name':'Reikjv','email':'141414061+Reikjv@users.noreply.github.com'}],
                'filter_tags':['logs','history','monitoring','export'],'extra_links':{'github':PUBLIC},
