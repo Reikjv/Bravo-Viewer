@@ -320,6 +320,12 @@ async function loadChart() {
   revealChart = true;
   drawChart();
 }
+// Uma cor por indicador: facilita reconhecer o gráfico de relance.
+const chartColors = {
+  voltage: {line: "#5cc4cf", fill: "rgba(92,196,207,.24)"}, current: {line: "#e3ad4f", fill: "rgba(227,173,79,.24)"},
+  depth: {line: "#6f9cf0", fill: "rgba(111,156,240,.24)"}, armed: {line: "#62c08f", fill: "rgba(98,192,143,.22)"},
+  consumed: {line: "#b996e6", fill: "rgba(185,150,230,.22)"}, energy: {line: "#e58fb0", fill: "rgba(229,143,176,.22)"},
+};
 function drawChart() {
   const canvas = $("plot"), rect = canvas.getBoundingClientRect();
   if (!rect.width) return;
@@ -355,12 +361,13 @@ function drawChart() {
     const item = {...point, x: x(point.t), y: y(point.avg), top: y(point.max), low: y(point.min)};
     segments.at(-1).push(item); plotted.push(item);
   });
-  ctx.fillStyle = "rgba(79,158,170,.22)";
+  const hue = chartColors[chartData.metric] || chartColors.voltage;
+  ctx.fillStyle = hue.fill;
   segments.forEach(segment => {
     ctx.beginPath(); segment.forEach((p, index) => index ? ctx.lineTo(p.x, p.top) : ctx.moveTo(p.x, p.top));
     [...segment].reverse().forEach(p => ctx.lineTo(p.x, p.low)); ctx.closePath(); ctx.fill();
   });
-  ctx.lineWidth = 1.6; ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.strokeStyle = "#7cc3cd";
+  ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.strokeStyle = hue.line;
   const step = chartData.metric === "armed";
   segments.forEach(segment => {
     ctx.beginPath();
@@ -370,7 +377,7 @@ function drawChart() {
       ctx.lineTo(p.x, p.y);
     });
     ctx.stroke();
-    if (segment.length === 1) { ctx.beginPath(); ctx.arc(segment[0].x, segment[0].y, 3.5, 0, Math.PI * 2); ctx.fillStyle = "#a6e1e9"; ctx.fill(); }
+    if (segment.length === 1) { ctx.beginPath(); ctx.arc(segment[0].x, segment[0].y, 3.5, 0, Math.PI * 2); ctx.fillStyle = hue.line; ctx.fill(); }
   });
   if (revealChart) {
     revealChart = false;

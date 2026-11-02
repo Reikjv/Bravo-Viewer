@@ -236,3 +236,49 @@ dialog label{margin:12px 0}
 @media(max-width:760px){aside{position:static;width:100%;padding:12px;border-right:0;border-bottom:1px solid var(--line)}.nav-label,.sidebar-bottom{display:none}nav{flex-direction:row;overflow:auto;margin-top:10px}nav button{flex-shrink:0}nav button .icon,nav button:before{display:none}main{margin-left:0;padding:14px}header{flex-direction:column;align-items:flex-start}.section-toolbar{flex-direction:column;align-items:flex-start}.chart-container{height:280px}footer{flex-direction:column;align-items:flex-start;gap:8px}}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 nav button{justify-content:flex-start}
+
+/* ── Identidade (0.9.1): cor da BRS, profundidade leve e movimento curto; sem degradês, brilhos ou caixa alta ── */
+:root{--bg:#0d1518;--side:#0f2a33;--panel:#15222a;--panel-2:#1a2932;--field:#101b21;--line:#243640;--line-soft:#1c2c35;--accent:#4fb3bf;--light:#9bd8df;--radius:8px;--shadow:0 1px 2px rgba(0,0,0,.35),0 6px 18px rgba(0,0,0,.18)}
+aside{background:var(--side);border-right:0;box-shadow:1px 0 0 #0a1e25}
+.brand{border-bottom-color:#16404c}
+.brs-logo{border-radius:6px}
+nav button{border-radius:6px;transition:background .15s,color .15s}
+nav button:hover{background:#133642}
+nav button.active{background:#18434f;color:#fff}
+nav button.active .icon{color:var(--light)}
+nav button.active:before{left:-12px;top:7px;bottom:7px;width:3px;border-radius:0 3px 3px 0}
+.nav-label{color:#5d8a95}
+.sidebar-bottom{border-top-color:#16404c;color:#6e98a2}
+button,.button,.upload-button{border-radius:6px;transition:background .15s,border-color .15s,transform .15s}
+button:active,.button:active{transform:translateY(1px)}
+input,select,textarea{border-radius:6px;transition:border-color .15s}
+.panel,.rov-card,dialog{box-shadow:var(--shadow)}
+.panel,.rov-card{transition:border-color .2s}
+.rov-card:hover{border-color:#33505c}
+header{border-bottom-color:var(--line)}
+h1{font-size:21px}
+
+/* Indicadores: cartões próprios, ícone e número em destaque */
+.kpis{gap:12px;border:0;background:none}
+.kpis article{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:var(--radius);box-shadow:var(--shadow);padding:14px 16px}
+.kpis article:first-child{border-left:3px solid var(--accent)}
+.kpi-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.kpi-icon{display:grid;place-items:center;width:28px;height:28px;border-radius:6px;background:rgba(79,179,191,.14);color:var(--light)}
+.kpi-icon .icon{width:15px;height:15px}
+.kpis strong{font-size:27px;color:#fff}
+.measurements{border-radius:var(--radius);background:var(--field)}
+.measurements strong{color:var(--light)}
+.operation-card{border-left:3px solid var(--accent)}
+.equipment-icon{border-radius:var(--radius);background:rgba(79,179,191,.12);border-color:transparent;color:var(--light)}
+.rov-op,.rov-stats,.session-totals{border-radius:6px;background:var(--field)}
+.rov-stats strong{color:var(--light)}
+th{background:#182731}
+tbody tr{transition:background .12s}
+.chart-container{border-radius:6px}
+.progress,.progress span{border-radius:2px}
+
+/* Movimento curto: troca de aba e conteúdo novo, sem efeitos de entrada encadeados */
+.page:not([hidden]){animation:page-in .18s ease-out}
+@keyframes page-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+#notice,.update-bar,.job{animation:page-in .2s ease-out}
+.rov-card.enter{animation:page-in .25s ease-out}
