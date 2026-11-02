@@ -104,6 +104,18 @@ Os testes locais incluíram 1.054.950 registros, oito clientes, exportação sim
 
 Este repositório contém o código da extensão, catálogo, testes e documentação de uso; as releases incluem os instaladores. Os logs de teste não estão incluídos. As dependências de terceiros conservam suas licenças na imagem.
 
+## Testar localmente antes de lançar
+
+Sem GitHub e sem compilar, com uma cópia dos dados de bancada:
+
+```powershell
+python tools/dev.py              # extensão do ROV no navegador (http://127.0.0.1:8090)
+python tools/dev.py desktop      # programa do PC em janela, direto do código
+python tools/dev.py instalador   # instalador do Windows de teste em artifacts/desktop (não publica)
+```
+
+Alterações em `web/` aparecem ao recarregar a página. Uma versão só é publicada ao criar a tag `v<versão>`; até lá nada é compilado no GitHub.
+
 ## Desenvolvimento
 
 Com Python 3.12 ou posterior:
