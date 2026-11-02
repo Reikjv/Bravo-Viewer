@@ -131,7 +131,7 @@ function renderOperations() {
     $("current-op-meta").textContent = [current.location, current.client, `desde ${date(current.started_at)}`].filter(Boolean).join(" · ");
     $("current-op-stats").innerHTML = operationStats(current);
     $("op-stats").innerHTML = operationStats(current);
-    $("op-started").textContent = "INICIADA EM " + date(current.started_at).toUpperCase();
+    $("op-started").textContent = "Iniciada em " + date(current.started_at);
     if (!opDirty && document.activeElement.closest?.("#op-form") == null) {
       $("op-name").value = current.name; $("op-location").value = current.location;
       $("op-client").value = current.client; $("op-notes").value = current.notes;
@@ -313,7 +313,7 @@ async function loadChart() {
   chartData = data;
   const name = files.find(item => String(item.id) === file)?.name || "";
   $("chart-title").textContent = `${data.label} · ${name}`;
-  $("chart-unit").textContent = data.unit || "SEM UNIDADE DEFINIDA";
+  $("chart-unit").textContent = data.unit || "sem unidade";
   $("chart-info").textContent = `${plural(data.points.length, "intervalo", "intervalos")} de ${data.seconds} s. A faixa mostra o mínimo e o máximo de cada intervalo; a linha, a média. Passe o cursor sobre o gráfico para consultar cada intervalo.`;
   const points = data.points;
   $("chart-stats").innerHTML = points.length ? `<div><small>Mínimo</small><strong>${fmt(Math.min(...points.map(p => p.min)), 4)} ${escape(data.unit)}</strong></div><div><small>Máximo</small><strong>${fmt(Math.max(...points.map(p => p.max)), 4)} ${escape(data.unit)}</strong></div><div><small>Média do último intervalo</small><strong>${fmt(points.at(-1).avg, 4)} ${escape(data.unit)}</strong></div>` : "";
@@ -338,15 +338,15 @@ function drawChart() {
   const first = points[0].t, last = points.at(-1).t;
   const x = t => left + (t - first) / (last - first || 1) * (right - left);
   const y = value => top + (hi - value) / (hi - lo) * (bottom - top);
-  ctx.font = '10.5px Inter,"Segoe UI",sans-serif';
+  ctx.font = '11px "Segoe UI",Roboto,sans-serif';
   ctx.setLineDash([3, 5]); ctx.lineWidth = 1;
   for (let index = 0; index <= 4; index++) {
     const lineY = Math.round(top + index * (bottom - top) / 4) + .5;
-    ctx.strokeStyle = "#1d3945"; ctx.beginPath(); ctx.moveTo(left, lineY); ctx.lineTo(right, lineY); ctx.stroke();
-    ctx.fillStyle = "#7f99a6"; ctx.textAlign = "right"; ctx.fillText(fmt(hi - index * (hi - lo) / 4, 3), left - 12, lineY + 4);
+    ctx.strokeStyle = "#222b2f"; ctx.beginPath(); ctx.moveTo(left, lineY); ctx.lineTo(right, lineY); ctx.stroke();
+    ctx.fillStyle = "#7d8b90"; ctx.textAlign = "right"; ctx.fillText(fmt(hi - index * (hi - lo) / 4, 3), left - 12, lineY + 4);
   }
   ctx.setLineDash([]);
-  ctx.fillStyle = "#7f99a6"; ctx.textAlign = "left"; ctx.fillText(date(first), left, h - 17);
+  ctx.fillStyle = "#7d8b90"; ctx.textAlign = "left"; ctx.fillText(date(first), left, h - 17);
   ctx.textAlign = "right"; ctx.fillText(date(last), right, h - 17);
   // Lacunas maiores que três intervalos (ROV desligado, salto de relógio) interrompem a linha.
   const segments = [];
@@ -355,16 +355,12 @@ function drawChart() {
     const item = {...point, x: x(point.t), y: y(point.avg), top: y(point.max), low: y(point.min)};
     segments.at(-1).push(item); plotted.push(item);
   });
-  const fill = ctx.createLinearGradient(0, top, 0, bottom);
-  fill.addColorStop(0, "rgba(95,180,192,.34)"); fill.addColorStop(1, "rgba(95,180,192,.12)");
-  ctx.fillStyle = fill;
+  ctx.fillStyle = "rgba(79,158,170,.22)";
   segments.forEach(segment => {
     ctx.beginPath(); segment.forEach((p, index) => index ? ctx.lineTo(p.x, p.top) : ctx.moveTo(p.x, p.top));
     [...segment].reverse().forEach(p => ctx.lineTo(p.x, p.low)); ctx.closePath(); ctx.fill();
   });
-  const stroke = ctx.createLinearGradient(left, 0, right, 0);
-  stroke.addColorStop(0, "#4fa3b1"); stroke.addColorStop(1, "#a6e1e9");
-  ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.strokeStyle = stroke;
+  ctx.lineWidth = 1.6; ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.strokeStyle = "#7cc3cd";
   const step = chartData.metric === "armed";
   segments.forEach(segment => {
     ctx.beginPath();
@@ -412,7 +408,7 @@ function fleetCard(device) {
   const where = device.host ? device.host + extra : "Dados enviados por outro PC";
   return `<article class="rov-card ${device.id === fleetData.active ? "active" : ""}">
     <header><span class="equipment-icon"><svg class="icon"><use href="#i-rov"/></svg></span><div><h2>${escape(device.equipment || "ROV")}</h2><small>${escape(where)}</small></div><span class="status ${state[1]}">${state[0]}</span></header>
-    <div class="rov-op"><small>OPERAÇÃO ATUAL</small><strong>${escape(op?.name || "—")}</strong><small>${escape([op?.location, op?.client].filter(Boolean).join(" · ") || "Sem local informado")}${op ? ` · desde ${escape(date(op.started_at))}` : ""}</small></div>
+    <div class="rov-op"><small>Operação atual</small><strong>${escape(op?.name || "—")}</strong><small>${escape([op?.location, op?.client].filter(Boolean).join(" · ") || "Sem local informado")}${op ? ` · desde ${escape(date(op.started_at))}` : ""}</small></div>
     <div class="rov-stats"><div><small>Tempo armado</small><strong>${duration(s.armed_seconds || 0)}</strong></div><div><small>Prof. máxima</small><strong>${depth.available ? meters(depth.max) : "Sem sensor"}</strong></div><div><small>Sessões</small><strong>${fmt(device.sessions || 0, 0)}</strong></div></div>
     <footer><span class="muted">${escape(device.message || (device.last_sync ? `Sincronizado em ${date(device.last_sync)}` : "Ainda não sincronizado"))}${device.pending_logs ? ` · ${plural(device.pending_logs, "log pendente", "logs pendentes")}` : ""}${device.closed ? ` · ${plural(device.closed, "operação encerrada", "operações encerradas")}` : ""}</span>${device.host ? `<button class="secondary" data-fleet-sync="${device.id}">Sincronizar</button>` : ""}<button data-fleet-open="${device.id}">Abrir</button></footer>
   </article>`;
@@ -428,7 +424,7 @@ function renderUpdate(update) {
 }
 function renderCloud(state) {
   if (!state) return;
-  $("cloud-pill").textContent = state.logged_in ? (state.running ? "ENVIANDO" : state.error ? "ATENÇÃO" : "CONECTADO") : "DESCONECTADO";
+  $("cloud-pill").textContent = state.logged_in ? (state.running ? "Enviando" : state.error ? "Atenção" : "Conectado") : "Desconectado";
   $("cloud-status").textContent = state.logged_in ? `${state.email} · ${state.message}${state.pending ? ` · ${plural(state.pending, "sessão pendente", "sessões pendentes")}` : ""}` : "Entre com a conta do Supabase para enviar os dados da frota.";
   $("fleet-cloud").textContent = state.logged_in ? ` · Nuvem: ${state.message}` : " · Nuvem desconectada";
   if (document.activeElement.closest?.("#cloud-form") == null && !cloudDirty) {

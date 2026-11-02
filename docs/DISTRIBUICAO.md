@@ -5,11 +5,13 @@ Repositório principal: [Reikjv/Bravo-Viewer](https://github.com/Reikjv/Bravo-Vi
 ## Publicação de uma versão
 
 1. Atualizar a versão em `rov_history/__init__.py`, `Dockerfile`, `install.sh`, `README.md` e `.github/workflows/verify-distribution.yml`.
-2. Criar e enviar a tag `v<versão>`. O workflow testa (backend, interface, esquema do Supabase), gera e testa as imagens ARM64/ARMv7, gera o instalador do Windows (instala em modo silencioso e inicia o programa), publica a imagem no GHCR e cria a release com instaladores, checksums e `manifest.json`.
-3. Mesclar o `manifest.json` da release no `manifest.json` da branch `main`, mantendo apenas a versão anterior além da nova.
-4. O BlueOS relê o catálogo periodicamente; para ver a versão imediatamente, acrescentar `?v=<versão>` à URL da fonte em Extensões.
+2. Criar e enviar a tag `v<versão>`. O workflow testa (backend, interface, esquema do Supabase), gera e testa as imagens ARM64/ARMv7 e o instalador do Windows, publica a imagem no GHCR e cria a release.
+3. No mesmo workflow, a versão entra no catálogo único [Reikjv/blueos-extensions](https://github.com/Reikjv/blueos-extensions) (segredo `CATALOG_TOKEN`), que mantém as 3 versões mais recentes; e as imagens de versões mais antigas são apagadas do GHCR.
+4. O BlueOS relê o catálogo periodicamente; para ver a versão na hora, acrescentar `?v=<qualquer coisa>` à URL da fonte.
 
-O Desktop instalado encontra a versão nova sozinho (aviso **Atualizar agora**, com conferência do SHA-256). Versões anteriores à 0.6.2 precisam de uma instalação manual.
+Builds completos (ARM e Windows) rodam apenas em tags; commits comuns rodam só os testes, e commits apenas de documentação não rodam nada. Repositório público não consome minutos do GitHub Actions.
+
+O Desktop instalado encontra a versão nova sozinho (aviso **Atualizar agora**, com conferência do SHA-256).
 
 ## Versões publicadas
 

@@ -4,8 +4,13 @@ on:
   push:
     branches: ['main']
     tags: ['v*']
+    # Commits só de documentação ou catálogo não rodam testes.
+    paths-ignore: ['**.md', 'docs/**', 'manifest.json', 'catalog/**']
 permissions:
   contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 jobs:
   test:
     runs-on: ubuntu-24.04
@@ -37,7 +42,8 @@ jobs:
           npm install --prefix .tooling/supabase-validation --no-save --package-lock=false @electric-sql/pglite@0.3.14
           node tools/test_supabase_schema.cjs
   build:
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    # Imagens ARM (QEMU) e Windows só ao lançar versão: são os jobs mais longos.
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: test
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -88,8 +94,9 @@ jobs:
           name: Bravo-Viewer-${{ matrix.arch }}
           path: artifacts/*
           compression-level: 0
-          retention-days: 14
+          retention-days: 1
   desktop:
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: test
     runs-on: windows-2022
     timeout-minutes: 30
@@ -128,7 +135,7 @@ jobs:
           name: Bravo-Viewer-Desktop
           path: artifacts/*
           compression-level: 0
-          retention-days: 14
+          retention-days: 1
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [build, desktop]
@@ -157,3 +164,46 @@ jobs:
           docker buildx imagetools create -t "$REGISTRY:$VERSION" "$REGISTRY:$VERSION-arm64" "$REGISTRY:$VERSION-armv7"
           python tools/create_catalog.py --metadata-dir artifacts/metadata --output artifacts/manifest.json
           gh release create "$TAG" artifacts/source/* artifacts/public/* artifacts/desktop/* artifacts/manifest.json --title "Bravo Viewer $TAG" --generate-notes --prerelease
+      - name: Publish in the BlueOS catalog
+        env:
+          CATALOG_TOKEN: ${{ secrets.CATALOG_TOKEN }}
+        run: |
+          if [ -z "$CATALOG_TOKEN" ]; then echo "::warning::CATALOG_TOKEN ausente; catálogo não atualizado"; exit 0; fi
+          git clone --depth 1 "https://x-access-token:${CATALOG_TOKEN}@github.com/Reikjv/blueos-extensions.git" catalogo
+          python catalogo/tools/publish.py artifacts/manifest.json --keep 3
+          python catalogo/tools/build.py
+          cd catalogo
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add extensions
+          git commit -m "Publica Bravo Viewer $GITHUB_REF_NAME" && git push
+      - name: Keep only recent images
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Mantém as imagens das 3 versões mais recentes; o resto ocupava espaço no GHCR.
+          python - <<'PY'
+          import json, re, subprocess
+          def api(*args):
+              return subprocess.run(["gh", "api", *args], check=True, capture_output=True, text=True).stdout
+          versions = json.loads(api("--paginate", "/users/Reikjv/packages/container/bravo-viewer/versions?per_page=100"))
+          def release(tag):
+              match = re.match(r"(\d+)\.(\d+)\.(\d+)(?:-[a-z]+\.?(\d+))?", tag)
+              return match and match.group(0)
+          tagged = {}
+          for item in versions:
+              for tag in item["metadata"]["container"]["tags"]:
+                  if release(tag):
+                      tagged.setdefault(release(tag), []).append(item["id"])
+          def order(tag):
+              a, b, c, d = re.match(r"(\d+)\.(\d+)\.(\d+)(?:-[a-z]+\.?(\d+))?", tag).groups()
+              return (int(a), int(b), int(c), 0 if d else 1, int(d or 0))
+          keep = sorted(tagged, key=order, reverse=True)[:3]
+          for tag in tagged:
+              if tag not in keep:
+                  for version_id in set(tagged[tag]):
+                      api("-X", "DELETE", f"/user/packages/container/bravo-viewer/versions/{version_id}")
+                      print("removida imagem", tag, version_id)
+          print("mantidas:", ", ".join(keep))
+          PY

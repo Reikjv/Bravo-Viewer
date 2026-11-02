@@ -423,7 +423,7 @@ def native_window(url, profile):
     """Janela própria do Windows (WebView2); bloqueia até o usuário fechar."""
     import webview
     webview.settings["ALLOW_DOWNLOADS"] = True
-    webview.create_window("Bravo Viewer", url, width=1440, height=920, min_size=(1000, 640), background_color="#071219")
+    webview.create_window("Bravo Viewer", url, width=1440, height=920, min_size=(1000, 640), background_color="#101416")
     webview.start(storage_path=str(profile), private_mode=False)
 
 

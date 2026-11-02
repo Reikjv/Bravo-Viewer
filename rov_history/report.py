@@ -181,26 +181,26 @@ def render(store, operation, data, zone=timezone.utc, chart_svg=None):
 :root{{--ink:#173a47;--muted:#5c7781;--line:#dbe7ea;--accent:#217987;--soft:#f3f8f9}}
 *{{box-sizing:border-box}}body{{margin:0;background:#eef4f5;color:var(--ink);font:14px/1.5 "Segoe UI",system-ui,sans-serif}}
 main{{max-width:1100px;margin:0 auto;padding:32px 22px 48px}}
-header{{display:flex;align-items:center;gap:20px;background:linear-gradient(120deg,#0f3442,#1d5566);color:#fff;border-radius:22px;padding:26px 30px;margin-bottom:22px}}
-header img{{width:96px;background:#fff;border-radius:14px;padding:8px}}header h1{{margin:0;font-size:28px}}header p{{margin:4px 0 0;color:#cfe6ea}}
-.eyebrow{{font-size:11px;letter-spacing:2px;color:#9fd3db;font-weight:700}}
+header{{display:flex;align-items:center;gap:20px;background:#173a47;color:#fff;border-radius:6px;padding:22px 26px;margin-bottom:20px}}
+header img{{width:88px;background:#fff;border-radius:4px;padding:6px}}header h1{{margin:0;font-size:28px}}header p{{margin:4px 0 0;color:#cfe6ea}}
+.eyebrow{{font-size:12px;color:#a9cfd5}}
 .kpis{{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px}}
-.kpi,.peak,.card{{background:#fff;border:1px solid var(--line);border-radius:16px;box-shadow:0 8px 22px -18px #173a4766}}
+.kpi,.peak,.card{{background:#fff;border:1px solid var(--line);border-radius:6px}}
 .kpi{{padding:16px 18px}}.kpi small,.peak small{{display:block;color:var(--muted);font-size:12px}}.kpi strong{{font-size:22px}}
 h2{{font-size:18px;margin:28px 0 12px}}h3{{margin:0 0 10px;font-size:15px}}h3 span{{color:var(--muted);font-weight:400;font-size:12px}}
 .peaks{{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}}.peak{{padding:14px 16px}}.peak strong{{display:block;font-size:20px;color:var(--accent)}}.peak span{{color:var(--muted);font-size:12px}}
 .card{{padding:18px;margin-bottom:14px}}svg{{width:100%;height:auto;display:block}}svg text{{font:12px "Segoe UI",system-ui;fill:#5c7781}}
-table{{width:100%;border-collapse:collapse;background:#fff;border-radius:16px;overflow:hidden;border:1px solid var(--line)}}th,td{{padding:10px 14px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}}
-th{{background:var(--soft);font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}}tr:last-child td{{border-bottom:0}}
+table{{width:100%;border-collapse:collapse;background:#fff;border-radius:6px;overflow:hidden;border:1px solid var(--line)}}th,td{{padding:10px 14px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}}
+th{{background:var(--soft);font-size:12px;color:var(--muted)}}tr:last-child td{{border-bottom:0}}
 .sev{{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;background:#fff1d6;color:#8a5a00}}.s0,.s1,.s2,.s3{{background:#fde2e2;color:#9b1c1c}}
 .muted{{color:var(--muted)}}td small{{display:block;color:var(--muted);font-size:12px}}.count{{font-variant-numeric:tabular-nums;color:var(--muted);white-space:nowrap}}footer{{margin-top:34px;color:var(--muted);font-size:12px;display:flex;align-items:center;gap:10px}}footer img{{width:30px}}
-.notes{{background:#fff;border:1px solid var(--line);border-radius:16px;padding:14px 18px;white-space:pre-wrap}}
+.notes{{background:#fff;border:1px solid var(--line);border-radius:6px;padding:14px 18px;white-space:pre-wrap}}
 @media(max-width:800px){{.kpis,.peaks{{grid-template-columns:repeat(2,1fr)}}header{{flex-direction:column;align-items:flex-start}}}}
 @media print{{body{{background:#fff}}header{{-webkit-print-color-adjust:exact;print-color-adjust:exact}}}}
 </style>
 <svg width="0" height="0" style="position:absolute"><defs><linearGradient id="bv-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#217987" stop-opacity=".3"/><stop offset="1" stop-color="#217987" stop-opacity=".08"/></linearGradient></defs></svg>
 <main>
-<header><img src="assets/brs.png" alt="BRS"><div><div class="eyebrow">RELATÓRIO DA OPERAÇÃO · {e(store.config()["equipment"])}</div><h1>{e(operation["name"])}</h1><p>{e(place or "Local não informado")} · {e(period)}</p></div></header>
+<header><img src="assets/brs.png" alt="BRS"><div><div class="eyebrow">Relatório da operação · {e(store.config()["equipment"])}</div><h1>{e(operation["name"])}</h1><p>{e(place or "Local não informado")} · {e(period)}</p></div></header>
 <div class="kpis">{kpis}</div>
 <h2>Picos registrados</h2><div class="peaks">{peak_rows or '<p class="muted">Sem medições de alimentação nesta operação.</p>'}</div>
 <h2>Mergulhos</h2><table><thead><tr><th>#</th><th>Início</th><th>Fim</th><th>Tempo armado</th></tr></thead><tbody>{dive_rows}</tbody></table>
